@@ -1,0 +1,32 @@
+{
+  "name": "concorde",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsc && node dist/src/app.js",
+    "test": "nyc --reporter=text mocha --timeout 30000 -r ts-node/register ./test/**/*.ts --exit --bail"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Weltskaiser/Concorde.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Weltskaiser/Concorde/issues"
+  },
+  "homepage": "https://github.com/Weltskaiser/Concorde#readme",
+  "dependencies": {
+    "chai": "^4.3.4",
+    "cowsay": "^1.5.0",
+    "discord.js": "^13.1.0",
+    "mocha": "^9.1.3",
+    "nyc": "^15.1.0"
+  },
+  "devDependencies": {
+    "@types/mocha": "^9.0.0",
+    "ts-node": "^10.4.0",
+    "typescript": "^4.5.2"
+  }
+}
