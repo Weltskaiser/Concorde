@@ -1,5 +1,6 @@
 import { Client, Guild, Channel, Intents, Message, TextChannel, User, TextBasedChannels, MessageReaction } from 'discord.js'
 
+let polls = Array<Poll>()
 let next_id = 0
 
 export class Bot {
@@ -35,13 +36,13 @@ export class Bot {
 			if (!this.c_o(await try_command(this, message))) return
 		})
 
-		/*this.client.on('messageReactionAdd', async (reaction: MessageReaction, user: User) => {
+		this.client.on('messageReactionAdd', async (reaction: MessageReaction, user: User) => {
 			if (this.client.user.id === user.id) {
 				return
 			}
 
 			try_set_vote(reaction, user)
-		})*/
+		})
 	}
 
 	private c_o = (result: boolean | string) => {
@@ -67,26 +68,38 @@ export class Bot {
 	}
 }
 
+class Elector {
+	id: string
+	votes: Array<number>
+
+	constructor (id: string, votes: Array<number>) {
+		this.id = id
+		this.votes = votes
+	}
+}
+
 class Poll {
 	private id: number
-	private title: string
-	private candidates: string[]
+	title: string
+	candidates: string[]
 	private channel: TextBasedChannels
-	private electors: Array<number>
+	poll_messages_ids: Array<string>
+	electors: Array<Elector>
+	electors_ids_having_voted: Array<string>
 
 	private reaction_numbers = ["\u0031\u20E3","\u0032\u20E3","\u0033\u20E3","\u0034\u20E3","\u0035\u20E3", "\u0036\u20E3","\u0037\u20E3","\u0038\u20E3","\u0039\u20E3"]
 
 	private launch_poll = async function(): Promise<void> {		
-		let introduction_message_content = "=== **" + this.title + "** ===\nClassez chaque candidat (A = préféré ; " + String.fromCharCode(64 + this.candidates.length) + " = le moins apprécié ; vous pouvez attribuer une même note à plusieurs candidats) :"
+		let introduction_message_content = "=== **" + this.title + "** ===\nClassez chaque candidat (1 = préféré ; " + this.candidates.length
+		introduction_message_content += " = le moins apprécié ; vous pouvez attribuer une même note à plusieurs candidats) :"
 		/*let introduction_message = */await this.channel.send(introduction_message_content)
 		/*poll_messages_ids.push(introduction_message.id)*/
 
 		let candidates_count = this.candidates.length
-		let poll_messages_ids = new Array<string>()
 		for (let i = 0; i < candidates_count; i++) {
-			let candidate_message_content = this.candidates[i]
+			let candidate_message_content = /*"`" + */this.candidates[i]/* + "`"*/
 			let candidate_message = await this.channel.send(candidate_message_content)
-			poll_messages_ids.push(candidate_message.id)
+			this.poll_messages_ids.push(candidate_message.id)
 
 			for (let j = 0; j < candidates_count; j++) {
 				candidate_message.react(this.reaction_numbers[j])
@@ -99,7 +112,10 @@ class Poll {
 		this.title = title
 		this.candidates = candidates
 		this.channel = channel
-		this.electors = new Array<number>()
+		this.electors = new Array<Elector>()
+		this.poll_messages_ids = new Array<string>()
+		this.electors = Array<Elector>()
+		this.electors_ids_having_voted = Array<string>()
 
 		this.launch_poll()
 	}
@@ -183,7 +199,8 @@ export let try_democratie_amour = async function(message: Message): Promise<bool
 
 	return message_sent !== undefined
 }
-export let try_command = async function(that: Bot, message: Message): Promise<string | boolean> {
+
+let try_command = async function(that: Bot, message: Message): Promise<string | boolean> {
 	if (!that.bot_triggered) {
 		if (message.content !== "!cc") { /*!commencer Concorde*/
 			return "nmon"
@@ -198,7 +215,7 @@ export let try_command = async function(that: Bot, message: Message): Promise<st
 
 		return true
 	}
-	else {
+	else if (!that.bot_started) {
 		let lines = cut_into_lines(message.content)
 		//console.log(lines)
 		
@@ -221,13 +238,136 @@ export let try_command = async function(that: Bot, message: Message): Promise<st
 			candidates.push(lines[i])
 		}
 
-		let poll = new Poll(next_id, title, candidates, message.channel)
+		polls.push(new Poll(next_id, title, candidates, message.channel))
 		next_id++
+
+		that.bot_started = true
 
 		return true
 	}
+	else {
+		if (message.content === "résultats") {
+			
+		}
+	}
 }
 
-/*export let try_set_vote = async function(reaction: MessageReaction, user: User) {
+let find_poll = function(message_id: string): Poll {
+	return polls[0]
+}
 
-}*/
+let find_poll_and_candidate = function(message_id: string): number[] {
+	for (let i = 0; i < polls.length; i++) {
+		for (let j = 0; j < polls[i].poll_messages_ids.length; j++) {
+			if (message_id === polls[i].poll_messages_ids[j]) {
+				return [i, j]
+			}
+		}
+	}
+	return [-1]
+}
+
+let elector_registred = function(poll: Poll, user_id: string): number {
+	for (let i = 0; i < poll.electors.length; i++) {
+		if (poll.electors[i].id === user_id) {
+			return i
+		}
+	}
+	return poll.electors.length
+}
+
+let emoji_to_vote = new Map<string, number>([
+	["1%E2%83%A3", 1],
+	["2%E2%83%A3", 2],
+	["3%E2%83%A3", 3],
+	["4%E2%83%A3", 4],
+	["5%E2%83%A3", 5],
+	["6%E2%83%A3", 6],
+	["7%E2%83%A3", 7],
+	["8%E2%83%A3", 8],
+	["9%E2%83%A3", 9],
+])
+
+let vote_complete = function(votes: number[]): boolean {
+	for (let i = 0 ; i < votes.length; i++) {
+		if (votes[i] === 0) {
+			return false
+		}
+	}
+	return true
+}
+
+let quick_sort = function(array: number[]) {
+	if (array.length === 1 || array.length === 0) {
+		return array
+	}
+
+	let left: number[] = []
+	let center = array[0]
+	let right: number[] = []
+
+	for (let i = 1; i < array.length; i++) {
+		if (array[i] < center) {
+			left.push(array[i])
+		}
+		else {
+			right.push(array[i])
+		}
+	}
+
+	return quick_sort(left).concat([center], quick_sort(right))
+}
+
+let try_set_vote = async function(reaction: MessageReaction, user: User) {
+	let message_id = reaction.message.id
+	let emoji_identifier = reaction.emoji.identifier
+	reaction.users.remove(user)
+
+	let result = find_poll_and_candidate(message_id)
+	if (result[0] === -1) {
+		return
+	}
+	let poll_index = result[0]
+	let poll = polls[poll_index]
+	let candidate_index = result[1]
+
+	let elector_index = elector_registred(poll, user.id)
+	if (elector_index === poll.electors.length) {
+		poll.electors.push(new Elector(user.id, new Array<number>(poll.poll_messages_ids.length).fill(0)))
+	}
+
+	let vote = emoji_to_vote.get((emoji_identifier))
+
+	let votes = poll.electors[elector_index].votes
+	votes[candidate_index] = vote
+
+	if (vote_complete(votes)) {
+		if (!(poll.electors[elector_index].id in poll.electors_ids_having_voted)) {
+			poll.electors_ids_having_voted.push(poll.electors[elector_index].id)
+		}
+
+		let votes_sorted = quick_sort(votes)
+		//console.log(votes_sorted)
+		let votes_used = new Array<boolean>(votes.length).fill(true)
+		let candidates_sorted: string[] = []
+		for (let i = 0; i < votes_sorted.length; i++) {
+			for (let j = 0; j < votes_used.length; j++) {
+				//console.log(i, j, votes_used, votes, votes_sorted, candidates_sorted, poll.candidates)
+				if (votes_sorted[i] === votes[j] && votes_used[j]) {
+					candidates_sorted.push(poll.candidates[j])
+					votes_used[j] = false
+					//console.log("Ok")
+					break
+				}
+			}
+		}
+		/*console.log(candidates_sorted)
+		console.log(votes_sorted)*/
+
+		let vote_complete_private_message = "=== **" + poll.title + "** ===\nVotre vote a bien été pris en compte. Voici un récapitulatif :"
+		for (let i = 0; i < votes.length; i++) {
+			vote_complete_private_message += "\n" + votes_sorted[i] + " : "/* + "`"*/  + candidates_sorted[i]/* + "`"*/
+		}
+		user.send(vote_complete_private_message)
+	}
+}
