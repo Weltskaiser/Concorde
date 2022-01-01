@@ -1,4 +1,4 @@
-import { Client, Guild, Channel, Intents, Message, TextChannel, User, TextBasedChannels, MessageReaction, MessageEmbed } from 'discord.js'
+import { Client, Guild, Channel, Intents, Message, TextChannel, User, TextBasedChannel, MessageReaction, MessageEmbed } from 'discord.js'
 
 const QuickChart = require('quickchart-js');
 
@@ -138,7 +138,7 @@ class Poll {
 	end_date_given: boolean
 	end_date: string
 	candidates: string[]
-	channel: TextBasedChannels
+	channel: TextBasedChannel
 	poll_messages_ids: Array<string>
 	introduction_message_id: string
 	uncomplete_electors: Array<Elector>
@@ -201,7 +201,7 @@ class Poll {
 		}
 	}
 
-	constructor (next_poll_id: number, title: string, end_date_given: boolean, end_date: string, candidates: string[], channel: TextBasedChannels) {
+	constructor (next_poll_id: number, title: string, end_date_given: boolean, end_date: string, candidates: string[], channel: TextBasedChannel) {
 		this.id = next_poll_id
 		this.title = title
 		this.end_date_given = end_date_given
