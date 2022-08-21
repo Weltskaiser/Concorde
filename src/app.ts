@@ -24,24 +24,67 @@ import { Candidate } from './entity/Candidate'
 	await connection.runMigrations()
 	console.log("!!!!!!");
 
-	/*await getConnection()
+	/*let i_1 = (await getConnection()
 		.createQueryBuilder()
 		.insert()
 		.into(Poll)
 		.values({ title: "title", end_date_given: true, end_date: "now", channel_id: "4814984", introduction_message_id: "4526", state: Poll_State.open, candidates_count: 2 })
-		.execute()
-	let poll: Poll
+		.execute()).identifiers
+	console.log(i_1)
+	let poll_1: Poll
 	try {
-		poll = await getRepository(Poll)
-		.createQueryBuilder("poll")
-		.where("poll.title = :title_p", { title_p: "title"})
-		.getOne()
+		poll_1 = await getRepository(Poll)
+			.createQueryBuilder("poll")
+			.where("poll.id = :id_p", { id_p: i_1[0].id })
+			.getOneOrFail()
 	} catch (error) {
 		console.log("Aïe 1")
 	}
-	console.log(poll)
+	console.log(poll_1)
+	let i_2 = (await getConnection()
+		.createQueryBuilder()
+		.insert()
+		.into(Poll)
+		.values({ title: "title !", end_date_given: true, end_date: "now", channel_id: "4814984", introduction_message_id: "4526", state: Poll_State.open, candidates_count: 2 })
+		.execute()).identifiers
+	console.log(i_2)
+	let poll_2: Poll
+	try {
+		poll_2 = await getRepository(Poll)
+			.createQueryBuilder("poll")
+			.where("poll.id = :id_p", { id_p: i_2[0].id })
+			.getOneOrFail()
+	} catch (error) {
+		console.log("Aïe 2")
+	}
+	console.log(poll_2)
 
-	let elector: Elector
+	await getConnection()
+		.createQueryBuilder()
+		.insert()
+		.into(Elector)
+		.values({
+			hash_id: 1,
+			///hash_id: 1,
+			complete: Elector_Status.uncomplete,
+			poll: poll_1
+		})
+		.execute()
+	console.log("Here")
+	await getConnection()
+		.createQueryBuilder()
+		.insert()
+		.into(Elector)
+		.values({
+			hash_id: 1,
+			///hash_id: 1,
+			complete: Elector_Status.uncomplete,
+			poll: poll_2
+		})
+		.execute()
+	console.log(await Elector.find({ relations: ["poll"] }))*/
+
+	/*let elector: Elector
 	for (let i = 0; i < 2; i++) {
 		try {
 			console.log(await Elector.find({ relations: ["poll"] }))

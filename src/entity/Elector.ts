@@ -6,7 +6,10 @@ import { Vote } from "./Vote"
 @Entity()
 //@TableInheritance({ column: { type: "varchar", name: "type" } })
 export class Elector extends BaseEntity {
-	@PrimaryColumn()
+	@PrimaryGeneratedColumn()
+	id: number
+	
+	@Column()
 	hash_id: number
 
 	@Column()
@@ -35,7 +38,7 @@ export class Elector extends BaseEntity {
 				.where("elector.hash_id = :elector_hash_id_p", { elector_hash_id_p: this.hash_id })
 				.getMany()
 		} catch (error) {
-			console.log("Snif")
+			console.log("Snif 4")
 		}
 		//console.log(votes)
 		let votes_sorted_by_poll_candidates = votes.sort((a, b) => a.candidate.order - b.candidate.order)

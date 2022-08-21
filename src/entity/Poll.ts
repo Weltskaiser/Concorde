@@ -11,12 +11,25 @@ export enum Poll_State {
 	closed
 }
 
-let get_introduction_message_content = async function(title: string, candidates_count: number, end_date_given: boolean, end_date: string, state: Poll_State): Promise<string> {
+let get_introduction_message_content = async function(title: string, candidates_count: number, end_date_given: boolean, end_date: string, state: Poll_State, launching: boolean, poll_id: number): Promise<string> {
 	let declinative_form: string
-	let complete_electors_count = (await getRepository(Elector)
-		.createQueryBuilder("elector")
-		.where("elector.complete = :complete_p", { complete_p: Elector_Status.complete })
-		.getMany()).length
+	let complete_electors_count: number
+	if (launching === true) {
+		complete_electors_count = 0
+	} else {
+		let complete_electors: Array<Elector>
+		try {
+			complete_electors = await getRepository(Elector)
+				.createQueryBuilder("elector")
+				.leftJoinAndSelect("elector.poll", "poll")
+				.where("poll.id = :poll_id_p", { poll_id_p: poll_id })
+				.andWhere("elector.complete = :complete_p", { complete_p: Elector_Status.complete })
+				.getMany()
+		} catch (error) {
+			console.log("Snif 5")
+		}
+		complete_electors_count = complete_electors.length
+	}
 	//this.complete_electors.length
 	if (complete_electors_count === 0) {
 		/*let encore_or_not: string
@@ -50,8 +63,8 @@ let get_introduction_message_content = async function(title: string, candidates_
 	return introduction_message_content		//this.candidates.length
 }
 
-let get_introduction_message_embed = async function(title: string, end_date_given: boolean, end_date: string, state: Poll_State, candidates_length: number): Promise<MessageEmbed> {
-	let introduction_message_content = await get_introduction_message_content(title, candidates_length, end_date_given, end_date, state)
+let get_introduction_message_embed = async function(title: string, end_date_given: boolean, end_date: string, state: Poll_State, candidates_length: number, launching: boolean, poll_id: number): Promise<MessageEmbed> {
+	let introduction_message_content = await get_introduction_message_content(title, candidates_length, end_date_given, end_date, state, launching, poll_id)
 	let introduction_message_embed = new MessageEmbed()
 		//.setColor("#E7B71F")
 		.setColor("#0099ff")
@@ -71,7 +84,8 @@ export let launch_poll = async function(title: string, end_date_given: boolean, 
 		.setColor("#0099ff")
 		.setTitle("=== **" + title + "** ===")
 		.setDescription(introduction_message_content)*/
-	let introduction_message = await channel.send({ embeds: [await get_introduction_message_embed(title, end_date_given, end_date, state, candidates.length)] })
+	let launching = true
+	let introduction_message = await channel.send({ embeds: [await get_introduction_message_embed(title, end_date_given, end_date, state, candidates.length, launching, 0)] })
 	//let introduction_message = await this.channel.send(introduction_message_content)
 	let introduction_message_id = introduction_message.id
 
@@ -352,7 +366,8 @@ export class Poll extends BaseEntity {
 			.getMany()).length*/
 		//let new_introduction_message = await get_introduction_message_content(this.title, this.candidates_count, this.end_date_given, this.end_date, this.state)
 		//introduction_message.edit(new_introduction_message)
-		introduction_message.edit({ embeds: [await get_introduction_message_embed(this.title, this.end_date_given, this.end_date, this.state, this.candidates_count)] })
+		let launching = false
+		introduction_message.edit({ embeds: [await get_introduction_message_embed(this.title, this.end_date_given, this.end_date, this.state, this.candidates_count, launching, this.id)] })
 	}
 
 	close_poll = async function(client: Client): Promise<boolean> {
@@ -386,7 +401,7 @@ export class Poll extends BaseEntity {
 				.andWhere("elector.complete = :elector_complete_p", { elector_complete_p: Elector_Status.complete })
 				.getMany()
 		} catch (error) {
-			console.log("Snif")
+			console.log("Snif 6")
 		}
 		for (let e = 0; e < complete_electors.length; e++) {
 			let elector_result = await complete_electors[e].get_result()
@@ -448,7 +463,7 @@ export class Poll extends BaseEntity {
 				.where("poll.id = :poll_id_p", { poll_id_p: this.id })
 				.getRawMany()
 		} catch (error) {
-			console.log("Snif")
+			console.log("Snif 7")
 		}
 		let raw_candidates_names_p: Array<string> = Array<string>()
 		for (let c of candidates_names) {

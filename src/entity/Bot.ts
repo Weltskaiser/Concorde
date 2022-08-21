@@ -1,7 +1,7 @@
-import { Client, Guild, Channel, Intents, Message, TextChannel, User, TextBasedChannel, MessageReaction, MessageEmbed } from 'discord.js'
+import { Client, Guild, Channel, Intents, Message, TextChannel, User, TextBasedChannel, MessageReaction, MessageEmbed, ThreadChannel } from 'discord.js'
 import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, PrimaryColumn, OneToMany, ManyToMany, ManyToOne, OneToOne, getConnection, getRepository, EntityNotFoundError, Connection, createQueryBuilder } from "typeorm"
 import { Poll_State,launch_poll, Poll } from "./Poll"
-import { Bot_State, Start, Trigger } from "./Bot_State"
+import { Bot_State, /*Start, */Trigger } from "./Bot_State"
 import { Elector } from './Elector'
 import { Vote } from './Vote'
 import { Candidate } from "./Candidate"
@@ -57,12 +57,39 @@ export class Bot {
 				}
 			}
 
-			await try_democratie_amour(message)
+			if (await try_democratie_amour(message) === true) {
+				return
+			}
+
+			let type = message.channel.type
+			if (type === "DM") {
+				message.author.send("Concorde ne fonctionne que sur les serveurs ! C'est compliqué de faire un vote dans une discussion de message privé...")
+				return
+			}
+
+			console.log("Début", await Trigger.find())
+			//console.log(await Start.find())
 
 			//if (!this.c_o(await try_command(this, message))) return
 			let trigger_found = await try_command_trigger(this.client, message)
 			///console.log(trigger_found)
-			let start_found = await try_command_start(this.client, message, trigger_found)
+			let start_found: Query_Result
+			try {
+				start_found = await try_command_start(this.client, message, trigger_found)
+			} catch (error) {
+				switch (error) {
+					case Insert_Error.poll_insertion_failed: {
+						console.log("Error while inserting poll.")
+						throw error
+					} case Insert_Error.candidate_insertion_failed: {
+						console.log("Error while inserting candidate.")
+						throw error
+					} default: {
+						throw error
+					}
+				}
+			}
+			console.log(start_found)
 			let vote_action_done = await try_command_vote_action(this.client, message, start_found)
 			if (trigger_found === Query_Result.succeeded_create || trigger_found === Query_Result.failed_create
 				|| start_found === Query_Result.succeeded_create || start_found === Query_Result.failed_create
@@ -73,6 +100,10 @@ export class Bot {
 				let start_found = await try_command_start(this.client, message)
 				if (start_found === true)
 			}*/
+
+			console.log("Fin", await Trigger.find())
+			//console.log(await Start.find())
+			console.log("\n")
 		})
 
 		this.client.on('messageReactionAdd', async (reaction: MessageReaction, user: User) => {
@@ -80,7 +111,18 @@ export class Bot {
 				return
 			}
 
-			await try_set_vote(reaction, user, this.client)
+			try {
+				await try_set_vote(reaction, user, this.client)
+			} catch (error) {
+				switch (error) {
+					case Insert_Error.elector_insertion_failed: {
+						console.log("Error while inserting elector.")
+						throw error
+					} default: {
+						throw error
+					}
+				}
+			}
 		})
 	}
 
@@ -127,16 +169,22 @@ let try_democratie_amour = async function(message: Message): Promise<boolean> {
 	return message_sent !== undefined
 }
 
-enum Error {
-	empty_line,
-	unclosed_quotation_mark,
-	no_space_or_line_break_after_quotation_mark,
-	not_enough_elements_in_first_line,
-	too_many_elements_in_first_line,
-	first_character_not_n,
-	already_poll_in_channel_having_title,
-	not_enough_lines,
-	title_not_found
+enum Insert_Error {
+	poll_insertion_failed = 10,
+	candidate_insertion_failed = 11,
+	elector_insertion_failed = 12
+}
+
+enum Command_Error {
+	empty_line = 0,
+	unclosed_quotation_mark = 1,
+	no_space_or_line_break_after_quotation_mark = 2,
+	not_enough_elements_in_first_line = 3,
+	too_many_elements_in_first_line = 4,
+	first_character_not_n = 5,
+	already_poll_in_channel_having_title = 6,
+	not_enough_lines = 7,
+	title_not_found = 8
 }
 
 /*interface error_E {
@@ -156,7 +204,7 @@ let cut_into_lines = function(text: string): string[] {
 			lines.push(line)
 			line = ""
 			i++
-			if (text[i] === "\n") throw Error.empty_line
+			if (text[i] === "\n") throw Command_Error.empty_line
 			if (i === text.length) {
 				break
 			}
@@ -178,17 +226,17 @@ let cut_command = function(string: string): string[] {
 	while (i < length) {
 		if (string[i] === `"`) {
 			i++
-			if (i === length) throw Error.unclosed_quotation_mark
+			if (i === length) throw Command_Error.unclosed_quotation_mark
 
 			while (string[i] !== `"`) {
 				word += string[i]
 
 				i++
-				if (i === length) throw Error.unclosed_quotation_mark
+				if (i === length) throw Command_Error.unclosed_quotation_mark
 			}
 
 			if (i !== length - 1) {
-				if (string[i + 1] !== " ") throw Error.no_space_or_line_break_after_quotation_mark
+				if (string[i + 1] !== " ") throw Command_Error.no_space_or_line_break_after_quotation_mark
 			}
 
 			cut_string.push(word)
@@ -308,25 +356,31 @@ let try_command_trigger = async function(/*that: Bot*/client: Client, message: M
 }
 
 let try_command_start = async function(client: Client, message: Message, trigger_found: Query_Result) : Promise<Query_Result> {
-	try {
-		//console.log("Hello")
-		await getRepository(Start)
-			.createQueryBuilder("start")
-			.where("start.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
-			.andWhere("start.channel_id = :channel_id_p", { channel_id_p: message.channel.id })
-			.getOneOrFail()
-		//console.log("there")
-	} catch (error) { // No start
-		//console.log("Wait what?")
+	//console.log("there")
+	//console.log("Wait what?")
+	if (trigger_found !== Query_Result.found) {
+		//return Query_Result.not_a_command
+		try {
+			//console.log("Hello")
+			/*await getRepository(Start)
+				.createQueryBuilder("start")
+				.where("start.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
+				.andWhere("start.channel_id = :channel_id_p", { channel_id_p: message.channel.id })
+				.getOneOrFail()*/
+			await getRepository(Poll)
+				.createQueryBuilder("poll")
+				.where("poll.channel_id = :poll_channel_id_p", { poll_channel_id_p: message.channelId })
+				.getOneOrFail()
+		} catch (error) {
+			return Query_Result.not_a_command
+		}
+		return Query_Result.found
+	} else {
+		//message.delete()
+
 		let message_content = message.content
 		let message_author = message.author
 		let message_channel_id = message.channel.id
-		
-		//message.delete()
-
-		if (trigger_found !== Query_Result.found) {
-			return Query_Result.not_a_command
-		}
 
 		if (message_content === "!ac") { /*!arrêter Concorde*/
 			//that.triggers.splice(triggered[1])
@@ -349,18 +403,23 @@ let try_command_start = async function(client: Client, message: Message, trigger
 
 			let first_line_w = cut_command(first_line)
 			//console.log(first_line_w)
-			if (first_line_w.length < 2) throw Error.not_enough_elements_in_first_line
-			if (first_line_w.length > 3) throw Error.too_many_elements_in_first_line
-			if (first_line_w[0] !== "n") throw Error.first_character_not_n
+			if (first_line_w.length < 2) throw Command_Error.not_enough_elements_in_first_line
+			if (first_line_w.length > 3) throw Command_Error.too_many_elements_in_first_line
+			if (first_line_w[0] !== "n") throw Command_Error.first_character_not_n
 
 			let title = first_line_w[1]
-			let polls_in_channel_having_title = await getRepository(Poll)
-				.createQueryBuilder("poll")
-				.where("poll.title = :title_p", { title_p: title })
-				.andWhere("poll.channel_id = :channel_id_p", { channel_id_p: message_channel_id })
-				.getMany()
+			let polls_in_channel_having_title: Array<Poll>
+			try {
+				polls_in_channel_having_title = await getRepository(Poll)
+					.createQueryBuilder("poll")
+					.where("poll.title = :title_p", { title_p: title })
+					.andWhere("poll.channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+					.getMany()
+			} catch (error) {
+				console.log("Snif 1")
+			}
 			if (polls_in_channel_having_title.length !== 0) {
-				throw Error.already_poll_in_channel_having_title
+				throw Command_Error.already_poll_in_channel_having_title
 			}
 
 			let end_date_given: boolean
@@ -370,9 +429,10 @@ let try_command_start = async function(client: Client, message: Message, trigger
 				end_date = first_line_w[2]
 			} else {
 				end_date_given = false
+				end_date = "Now"
 			}
 
-			if (lines.length < 2) throw Error.not_enough_lines
+			if (lines.length < 2) throw Command_Error.not_enough_lines
 			let candidates = new Array<string>()
 			for (let i = 1; i < lines.length; i++) {
 				candidates.push(lines[i])
@@ -417,7 +477,8 @@ let try_command_start = async function(client: Client, message: Message, trigger
 						.execute()).identifiers[0].id })
 					.getOneOrFail()
 			} catch (error) {
-				console.log("Impossible")
+				throw Insert_Error.poll_insertion_failed
+				//console.log("Impossible 1")
 			}
 
 			///console.log(poll)
@@ -470,7 +531,8 @@ let try_command_start = async function(client: Client, message: Message, trigger
 							.execute()).identifiers[0].message_id })
 						.getOneOrFail()
 				} catch (error) {
-					console.log("Impossible")
+					throw Insert_Error.candidate_insertion_failed
+					//console.log("Impossible 2")
 				}
 				//candidate.poll = poll
 				await getConnection().manager.save(candidate)
@@ -522,39 +584,40 @@ let try_command_start = async function(client: Client, message: Message, trigger
 			//next_poll_id++
 		} catch (error) {
 			switch (error) {
-				case Error.empty_line: {
+				case Command_Error.empty_line: {
 					message_author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.empty_line: {
+				} case Command_Error.empty_line: {
 					message_author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.unclosed_quotation_mark: {
+				} case Command_Error.unclosed_quotation_mark: {
 					message_author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.no_space_or_line_break_after_quotation_mark: {
+				} case Command_Error.no_space_or_line_break_after_quotation_mark: {
 					message_author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.not_enough_elements_in_first_line: {
+				} case Command_Error.not_enough_elements_in_first_line: {
 					//return "Command is uncomplete: first line does not match the syntax."
 					message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir au moins 2 : l'élément \"n\" et le titre du vote)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.too_many_elements_in_first_line: {
+				} case Command_Error.too_many_elements_in_first_line: {
 					//return "Command is uncomplete: first line does not match the syntax."
 					message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir au maximum que 3 : l'élément \"n\", le titre du vote et la date prévue de fin)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.first_character_not_n: {
+				} case Command_Error.first_character_not_n: {
 					//return "Command is uncomplete: first line does not match the syntax."
 					message_author.send("Erreur. La commande est incorrecte : le premier élément doit être l'élément \"n\"." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.already_poll_in_channel_having_title: {
+				} case Command_Error.already_poll_in_channel_having_title: {
 					//return "Command is uncomplete: first line does not match the syntax."
 					message_author.send("Erreur. La commande est incorrecte : un vote possédant ce titre est déjà présent dans ce salon." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
-				} case Error.not_enough_lines: {
+				} case Command_Error.not_enough_lines: {
 					//return "Command is uncomplete: lines are missing (no candidates given)."
 					message_author.send("Erreur. La commande est incomplète : elle doit faire minimum 2 lignes (aucun candidat n'a été fourni)." + syntax_start_reminder(message_content))
 					return Query_Result.failed_create
 				} default: {
+					console.log("I exist.t")
 					throw error
 				}
 			}
@@ -566,7 +629,26 @@ let try_command_start = async function(client: Client, message: Message, trigger
 		//await getConnection().manager.save(start)
 		//await start.save()
 		//that.starts.push()
+		
 		await getConnection()
+			.createQueryBuilder()
+			.delete()
+			.from(Trigger)
+			.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message_author.id) })
+			.andWhere("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+			.execute()
+
+		/*try {
+			//console.log("Hello")
+			await getRepository(Start)
+				.createQueryBuilder("start")
+				.where("start.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message_author.id) })
+				.andWhere("start.channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+				.getOneOrFail()
+				//console.log("there")
+		} catch (error) { // No start*/
+			//console.log("Snif")
+		/*	await getConnection()
 			.createQueryBuilder()
 			.insert()
 			.into(Start)
@@ -576,17 +658,11 @@ let try_command_start = async function(client: Client, message: Message, trigger
 			})
 			.execute()
 
-		await getConnection()
-			.createQueryBuilder()
-			.delete()
-			.from(Trigger)
-			.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message_author.id) })
-			.andWhere("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
-			.execute()
-
+			//return Query_Result.succeeded_create
+		}*/
 		return Query_Result.succeeded_create
+		//return Query_Result.found
 	}
-	return Query_Result.found
 }
 
 let get_poll_from_channel_title = async function(message_channel_id: string, title: string): Promise<Poll> {
@@ -599,7 +675,7 @@ let get_poll_from_channel_title = async function(message_channel_id: string, tit
 		.getOneOrFail()
 	} catch (error) {
 		//console.log("Error occured finding poll")
-		throw Error.title_not_found
+		throw Command_Error.title_not_found
 	}
 	return poll
 }
@@ -615,7 +691,7 @@ let syntax_results_reminder = function(message_content: string) {
 }
 
 let try_command_vote_action = async function(client: Client, message: Message, start_found: Query_Result): Promise<Query_Result> {
-	if (start_found !== Query_Result.found) {
+	if (start_found !== Query_Result.found/* && start_found !== Query_Result.succeeded_create*/) {
 		return Query_Result.not_a_command
 	}
 
@@ -631,8 +707,8 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 			/*if (command.length > 2) {
 				return Query_Result.failed_create
 			}*/
-			if (command.length < 2) throw Error.not_enough_elements_in_first_line
-			if (command.length > 2) throw Error.too_many_elements_in_first_line
+			if (command.length < 2) throw Command_Error.not_enough_elements_in_first_line
+			if (command.length > 2) throw Command_Error.too_many_elements_in_first_line
 
 			//message.delete()
 
@@ -735,33 +811,33 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 			//that.triggers.splice(triggered[1])
 			//that.starts.splice(started[1])
 
-			await getConnection()
+			/*await getConnection()
 				.createQueryBuilder()
 				.delete()
 				.from(Start)
 				.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message_author.id) })
 				.andWhere("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
-				.execute()
+				.execute()*/
 
 			return Query_Result.succeeded_create
 		}
 	} catch (error) {
 		switch (error) {
-			case Error.unclosed_quotation_mark: {
+			case Command_Error.unclosed_quotation_mark: {
 				message_author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_stop_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.no_space_or_line_break_after_quotation_mark: {
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
 				message_author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_stop_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.not_enough_elements_in_first_line: {
+			} case Command_Error.not_enough_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
 				message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!av\" et le titre du vote)." + syntax_stop_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.too_many_elements_in_first_line: {
+			} case Command_Error.too_many_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
 				message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!av\" et le titre du vote." + syntax_stop_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.title_not_found: {
+			} case Command_Error.title_not_found: {
 				message_author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
 			} default: {
@@ -776,8 +852,8 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 		let command = cut_command(message_content)
 
 		if (command[0] === "!r") { /*résultats*/
-			if (command.length < 2) throw Error.not_enough_elements_in_first_line
-			if (command.length > 2) throw Error.too_many_elements_in_first_line
+			if (command.length < 2) throw Command_Error.not_enough_elements_in_first_line
+			if (command.length > 2) throw Command_Error.too_many_elements_in_first_line
 
 			//let result = await find_poll_from_channel(message.channel.id)
 			let poll = await get_poll_from_channel_title(message_channel_id, command[1])
@@ -812,21 +888,21 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 		}
 	} catch (error) {
 		switch (error) {
-			case Error.unclosed_quotation_mark: {
+			case Command_Error.unclosed_quotation_mark: {
 				message_author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.no_space_or_line_break_after_quotation_mark: {
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
 				message_author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.not_enough_elements_in_first_line: {
+			} case Command_Error.not_enough_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
 				message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!r\" et le titre du vote)." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.too_many_elements_in_first_line: {
+			} case Command_Error.too_many_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
 				message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!r\" et le titre du vote." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
-			} case Error.title_not_found: {
+			} case Command_Error.title_not_found: {
 				message_author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
 			} default: {
@@ -1036,10 +1112,10 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 	} catch (error) {
 		///console.log("°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°")
 		try {
-			elector = await getRepository(Elector)
-				.createQueryBuilder("elector")
-				.leftJoinAndSelect("elector.poll", "poll")
-				.where("elector.hash_id = :elector_hash_id_p", { elector_hash_id_p: (await getConnection()
+			//console.log("I was there")
+			//console.log(await Elector.find({ relations: ["poll"] }))
+			//console.log(poll)
+			let i = (await getConnection()
 					.createQueryBuilder()
 					.insert()
 					.into(Elector)
@@ -1049,10 +1125,16 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 						complete: Elector_Status.uncomplete,
 						poll: poll
 					})
-					.execute()).identifiers[0].hash_id })
+					.execute()).identifiers
+			//console.log(i)
+			elector = await getRepository(Elector)
+				.createQueryBuilder("elector")
+				.leftJoinAndSelect("elector.poll", "poll")
+				.where("elector.id = :elector_id_p", { elector_id_p: i[0].id })
 				.getOneOrFail()
 		} catch (error) {
-			console.log("Impossible")
+			throw Insert_Error.elector_insertion_failed
+			//console.log("Impossible 3")
 		}
 		/*elector.poll = poll
 		await getConnection().manager.save(elector)*/
@@ -1167,10 +1249,10 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 			.createQueryBuilder("vote")
 			.leftJoinAndSelect("vote.elector", "elector")
 			.leftJoinAndSelect("vote.candidate", "candidate")
-			.where("elector.hash_id = :elector_hash_id_p", { elector_hash_id_p: elector.hash_id })
+			.where("elector.id = :elector_id_p", { elector_id_p: elector.id })
 			.getMany()
 	} catch (error) {
-		console.log("Snif")
+		console.log("Snif 2")
 	}
 	//console.log(elector.poll)
 	///console.log(elector_votes, poll.candidates_count)
@@ -1205,7 +1287,7 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 				.createQueryBuilder()
 				.update(Elector)
 				.set({ complete: Elector_Status.complete })
-				.where("hash_id = :hash_id_p", { hash_id_p: elector.hash_id })
+				.where("id = :id_p", { id_p: elector.id })
 				.execute()
 			///console.log(elector)
 		}
@@ -1249,7 +1331,7 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 				.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
 				.getMany()
 		} catch (error) {
-			console.log("Snif")
+			console.log("Snif 3")
 		}
 		//console.log(vote_candidates)
 		for (let i = 0; i < elector_votes_sorted.length; i++) {
