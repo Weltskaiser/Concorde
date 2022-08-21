@@ -67,7 +67,7 @@ export class Bot {
 				return
 			}
 
-			console.log("Début", await Trigger.find())
+			// console.log("Début", await Trigger.find())
 			//console.log(await Start.find())
 
 			//if (!this.c_o(await try_command(this, message))) return
@@ -89,7 +89,7 @@ export class Bot {
 					}
 				}
 			}
-			console.log(start_found)
+			// console.log(start_found)
 			let vote_action_done = await try_command_vote_action(this.client, message, start_found)
 			if (trigger_found === Query_Result.succeeded_create || trigger_found === Query_Result.failed_create
 				|| start_found === Query_Result.succeeded_create || start_found === Query_Result.failed_create
@@ -101,9 +101,9 @@ export class Bot {
 				if (start_found === true)
 			}*/
 
-			console.log("Fin", await Trigger.find())
+			// console.log("Fin", await Trigger.find())
 			//console.log(await Start.find())
-			console.log("\n")
+			// console.log("\n")
 		})
 
 		this.client.on('messageReactionAdd', async (reaction: MessageReaction, user: User) => {
@@ -318,6 +318,16 @@ let try_command_trigger = async function(/*that: Bot*/client: Client, message: M
 		/*console.log(message.author.id)
 		console.log(string_to_hash(message.author.id))
 		console.log(message.channel.id)*/
+
+		// Delete every trigger for every other channel
+		await getConnection()
+			.createQueryBuilder()
+			.delete()
+			.from(Trigger)
+			.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
+			.execute()
+
+		// Now the trigger is on the current channel
 		await getConnection()
 			.createQueryBuilder()
 			.insert()
@@ -681,13 +691,96 @@ let get_poll_from_channel_title = async function(message_channel_id: string, tit
 }
 
 let syntax_stop_reminder = function(message_content: string) {
-	return "\nExemple d'utilisation  :\n\`\`\`!av \"Vote lambda\"\`\`\`"
+	return "\nExemple d'utilisation  :\n\`\`\`!as \"Vote lambda\"\`\`\`"
 	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
 }
 
 let syntax_results_reminder = function(message_content: string) {
-	return "\nExemple d'utilisation  :\n\`\`\`!r \"Vote lambda\"\`\`\`"
+	return "\nExemple d'utilisation  :\n\`\`\`!ar \"Vote lambda\"\`\`\`"
 	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
+}
+
+let delete_poll = async function(client: Client, poll: Poll) {
+	if (!poll.close_poll(client)) {
+		//return "Poll did not close properly."
+		throw Query_Result.poll_not_close_properly
+	}
+
+	/*if (result === -1) {
+		return "nmon"
+	}
+	let polls = await Poll.find()
+	let poll = polls[result]
+
+	if (!poll.close_poll()) {
+		return "Poll did not close properly."
+	}*/
+
+	//console.log("EEE", await Vote.find())
+	let votes_to_delete_ids = await getRepository(Vote)
+		.createQueryBuilder("vote")
+		.leftJoinAndSelect("vote.elector", "elector")
+		.leftJoinAndSelect("elector.poll", "poll")
+		.select("vote.id")
+		/*.delete()
+		.from(Vote)*/
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		.getRawMany()
+		/*.execute()*/
+	//console.log(votes_to_delete_ids)
+	for (let raw_vote of votes_to_delete_ids) {
+		await getConnection()
+			.createQueryBuilder()
+			.delete()
+			.from(Vote)
+			.where("id = :id_p", { id_p: raw_vote.vote_id })
+			.execute()
+	}
+	/*let candidates_td = await getRepository(Candidate)
+		.createQueryBuilder("candidate")
+		.leftJoinAndSelect("candidate.poll", "poll")
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id})
+		.getMany()
+	let raw = Array<string>()
+	for (let c of candidates_td) {
+		raw.push(c.message_id)
+	}
+	//console.log(raw)
+	await getConnection()
+		.createQueryBuilder()
+		.delete()
+		.from(Vote)
+		.where("candidate.message_id IN (:...candidates_messages_ids_p)", { candidates_messages_ids_p: raw })
+		.execute()*/
+	//console.log(await Vote.find())
+
+	//console.log(await Candidate.find())
+	await getConnection()
+		.createQueryBuilder()
+		.delete()
+		.from(Candidate)
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		.execute()
+	//console.log(await Candidate.find())
+
+	//console.log(await Elector.find())
+	await getConnection()
+		.createQueryBuilder()
+		.delete()
+		.from(Elector)
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		.execute()
+	//console.log(await Elector.find())
+
+	//console.log(await Poll.find())
+	await getConnection()
+		.createQueryBuilder()
+		.delete()
+		.from(Poll)
+		//.where("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+		.where("id = :id_p", { id_p: poll.id })
+		.execute()
+	//console.log(await Poll.find())
 }
 
 let try_command_vote_action = async function(client: Client, message: Message, start_found: Query_Result): Promise<Query_Result> {
@@ -702,8 +795,8 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 	// From here: if poll launched
 	try {
 		let command = cut_command(message_content)
-		//if (message.content[0] === "!av") { /*arrêter vote*/
-		if (command[0] === "!av") { /*arrêter vote*/
+		//if (message.content[0] === "!as") { /*arrêter vote*/
+		if (command[0] === "!as") { /*arrêter vote*/
 			/*if (command.length > 2) {
 				return Query_Result.failed_create
 			}*/
@@ -725,86 +818,7 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 					console.log("Error occured finding poll")
 			}*/
 
-			if (!poll.close_poll(client)) {
-				//return "Poll did not close properly."
-				return Query_Result.poll_not_close_properly
-			}
-
-			/*if (result === -1) {
-				return "nmon"
-			}
-			let polls = await Poll.find()
-			let poll = polls[result]
-
-			if (!poll.close_poll()) {
-				return "Poll did not close properly."
-			}*/
-
-			//console.log("EEE", await Vote.find())
-			let votes_to_delete_ids = await getRepository(Vote)
-				.createQueryBuilder("vote")
-				.leftJoinAndSelect("vote.elector", "elector")
-				.leftJoinAndSelect("elector.poll", "poll")
-				.select("vote.id")
-				/*.delete()
-				.from(Vote)*/
-				.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-				.getRawMany()
-				/*.execute()*/
-			//console.log(votes_to_delete_ids)
-			for (let raw_vote of votes_to_delete_ids) {
-				await getConnection()
-					.createQueryBuilder()
-					.delete()
-					.from(Vote)
-					.where("id = :id_p", { id_p: raw_vote.vote_id })
-					.execute()
-			}
-			/*let candidates_td = await getRepository(Candidate)
-				.createQueryBuilder("candidate")
-				.leftJoinAndSelect("candidate.poll", "poll")
-				.where("poll.id = :poll_id_p", { poll_id_p: poll.id})
-				.getMany()
-			let raw = Array<string>()
-			for (let c of candidates_td) {
-				raw.push(c.message_id)
-			}
-			//console.log(raw)
-			await getConnection()
-				.createQueryBuilder()
-				.delete()
-				.from(Vote)
-				.where("candidate.message_id IN (:...candidates_messages_ids_p)", { candidates_messages_ids_p: raw })
-				.execute()*/
-			//console.log(await Vote.find())
-
-			//console.log(await Candidate.find())
-			await getConnection()
-				.createQueryBuilder()
-				.delete()
-				.from(Candidate)
-				.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-				.execute()
-			//console.log(await Candidate.find())
-
-			//console.log(await Elector.find())
-			await getConnection()
-				.createQueryBuilder()
-				.delete()
-				.from(Elector)
-				.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-				.execute()
-			//console.log(await Elector.find())
-
-			//console.log(await Poll.find())
-			await getConnection()
-				.createQueryBuilder()
-				.delete()
-				.from(Poll)
-				//.where("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
-				.where("id = :id_p", { id_p: poll.id })
-				.execute()
-			//console.log(await Poll.find())
+			await delete_poll(client, poll)
 
 			/*polls.splice(result)*/
 
@@ -831,11 +845,11 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 				return Query_Result.failed_create
 			} case Command_Error.not_enough_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
-				message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!av\" et le titre du vote)." + syntax_stop_reminder(message_content))
+				message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!as\" et le titre du vote)." + syntax_stop_reminder(message_content))
 				return Query_Result.failed_create
 			} case Command_Error.too_many_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
-				message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!av\" et le titre du vote." + syntax_stop_reminder(message_content))
+				message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!as\" et le titre du vote." + syntax_stop_reminder(message_content))
 				return Query_Result.failed_create
 			} case Command_Error.title_not_found: {
 				message_author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(message_content))
@@ -851,7 +865,7 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 	try {
 		let command = cut_command(message_content)
 
-		if (command[0] === "!r") { /*résultats*/
+		if (command[0] === "!ar") { /*arrêter et afficher les résultats*/
 			if (command.length < 2) throw Command_Error.not_enough_elements_in_first_line
 			if (command.length > 2) throw Command_Error.too_many_elements_in_first_line
 
@@ -884,6 +898,19 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 			/*console.log(results[0])
 			console.log(results[1])*/
 
+			// Now close the poll
+			try {
+				await delete_poll(client, poll)
+			} catch (error) {
+				switch (error) {
+					case Query_Result.poll_not_close_properly: {
+						return Query_Result.poll_not_close_properly
+					} default: {
+						throw error
+					}
+				}
+			}
+
 			return Query_Result.succeeded_create
 		}
 	} catch (error) {
@@ -896,11 +923,11 @@ let try_command_vote_action = async function(client: Client, message: Message, s
 				return Query_Result.failed_create
 			} case Command_Error.not_enough_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
-				message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!r\" et le titre du vote)." + syntax_results_reminder(message_content))
+				message_author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!ar\" et le titre du vote)." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
 			} case Command_Error.too_many_elements_in_first_line: {
 				//return "Command is uncomplete: first line does not match the syntax."
-				message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!r\" et le titre du vote." + syntax_results_reminder(message_content))
+				message_author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!ar\" et le titre du vote." + syntax_results_reminder(message_content))
 				return Query_Result.failed_create
 			} case Command_Error.title_not_found: {
 				message_author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(message_content))
