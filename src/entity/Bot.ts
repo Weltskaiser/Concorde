@@ -5,27 +5,28 @@ import { Bot_State, /*Start, */Trigger } from "./Bot_State"
 import { Elector } from './Elector'
 import { Vote } from './Vote'
 import { Candidate } from "./Candidate"
-import { EntityListenerMetadata } from 'typeorm/metadata/EntityListenerMetadata'
+import * as bcrypt from "bcrypt"
 
 //export let polls = Array<Poll>()
 //export let next_poll_id = 0
 
-let string_to_hash = function(string: string) {
-	let hash = 0
+// let string_to_hash = function(string: string) {
+// 	let hash = 0
 
-	if (string.length === 0) return hash
+// 	if (string.length === 0) return hash
 
-	for (let i = 0; i < string.length; i++) {
-		let char = string.charCodeAt(i)
-		hash = ((hash << 5) - hash) + char
-		hash |= 0
-	}
+// 	for (let i = 0; i < string.length; i++) {
+// 		let char = string.charCodeAt(i)
+// 		hash = ((hash << 5) - hash) + char
+// 		hash |= 0
+// 	}
 
-	return hash
-}
+// 	return hash
+// }
 
 export class Bot {
-	private client: Client
+	// private client: Client
+	public client: Client
 	private self_respond_counter: number
 
 	/*@OneToMany(() => Trigger, trigger => trigger.bot)
@@ -268,7 +269,7 @@ let cut_command = function(string: string): string[] {
 
 //let syntax_start_reminder = `\nExemple d'utilisation :\n> n "Vote lambda"\n> Candidat A\n> Candidat B\n> Candidat C\nPour arrêter de tenter de lancer un vote :\n> !ac`
 
-let syntax_start_reminder = function(message_content: string) {
+let syntax_start_reminder = function(message_content: string): string {
 	return "\nExemple d'utilisation (la date est optionnelle) :\n\`\`\`n \"Vote lambda\" \"Vendredi 24 décembre 2021, 12 h 34 m 56 s\"\nCandidat A\nCandidat B\nCandidat C\`\`\`"
 	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
 	+ "\nPour arrêter de tenter de lancer un vote :\n\`\`\`\n!ac\`\`\`"
@@ -290,18 +291,29 @@ enum Query_Result {
 	poll_not_close_properly,
 	succeeded_create,
 	found,
+	not_found
+}
+
+let look_for_trigger = async function(message_channel_id: string, message_author_id: string): Promise<Query_Result> {
+	let triggers = await getRepository(Trigger)
+		.createQueryBuilder("trigger")
+		// .where("trigger.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
+		.where("trigger.channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+		.getMany()
+	for (let trigger of triggers) {
+		if (await bcrypt.compare(message_author_id, trigger.author_hash_id)) {
+			return Query_Result.found
+		}
+	}
+	return Query_Result.not_found
 }
 
 let try_command_trigger = async function(/*that: Bot*/client: Client, message: Message): Promise<Query_Result> {
 	/*let triggered = bot_already_stated_here(that.triggers, message.author.id, message.channel.id)
 	let started = bot_already_stated_here(that.starts, message.author.id, message.channel.id)*/
-	try {
-		await getRepository(Trigger)
-			.createQueryBuilder("trigger")
-			.where("trigger.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
-			.andWhere("trigger.channel_id = :channel_id_p", { channel_id_p: message.channel.id })
-			.getOneOrFail()
-	} catch (error) { // No trigger
+	if (await look_for_trigger(message.channel.id, message.author.id) === Query_Result.found) {
+		return Query_Result.found
+	} else { // No trigger, look_for_trigger returns Query_Result.not_found
 		/*let message_content = message.content
 		let message_author_id = message.author.id
 		let message_channel_id = message.channel.id*/
@@ -320,20 +332,23 @@ let try_command_trigger = async function(/*that: Bot*/client: Client, message: M
 		console.log(message.channel.id)*/
 
 		// Delete every trigger for every other channel
-		await getConnection()
-			.createQueryBuilder()
-			.delete()
-			.from(Trigger)
-			.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
-			.execute()
+		let triggers = await getRepository(Trigger)
+			.createQueryBuilder("trigger")
+			.getMany()
+		for (let trigger of triggers) {
+			if (await bcrypt.compare(message.author.id, trigger.author_hash_id)) {
+				await trigger.remove()
+			}
+		}
 
 		// Now the trigger is on the current channel
+		const saltRounds = 10
 		await getConnection()
 			.createQueryBuilder()
 			.insert()
 			.into(Trigger)
 			.values({
-				author_hash_id: string_to_hash(message.author.id),
+				author_hash_id: await bcrypt.hash(message.author.id, saltRounds),
 				channel_id: message.channel.id
 			})
 			.execute()
@@ -345,7 +360,6 @@ let try_command_trigger = async function(/*that: Bot*/client: Client, message: M
 
 		return Query_Result.succeeded_create
 	}
-	return Query_Result.found
 	/*if (!triggered[0]) {
 		if (message.content !== "!cc") { /*!commencer Concorde*/
 	/*		return
@@ -395,13 +409,15 @@ let try_command_start = async function(client: Client, message: Message, trigger
 		if (message_content === "!ac") { /*!arrêter Concorde*/
 			//that.triggers.splice(triggered[1])
 
-			await getConnection()
-				.createQueryBuilder()
-				.delete()
-				.from(Trigger)
-				.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message_author.id) })
-				.andWhere("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
-				.execute()
+			let triggers = await getRepository(Trigger)
+				.createQueryBuilder("trigger")
+				.where("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+				.getMany()
+			for (let trigger of triggers) {
+				if (await bcrypt.compare(message.author.id, trigger.author_hash_id)) {
+					await trigger.remove()
+				}
+			}
 
 			return Query_Result.succeeded_create
 		}
@@ -639,14 +655,16 @@ let try_command_start = async function(client: Client, message: Message, trigger
 		//await getConnection().manager.save(start)
 		//await start.save()
 		//that.starts.push()
-		
-		await getConnection()
-			.createQueryBuilder()
-			.delete()
-			.from(Trigger)
-			.where("author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message_author.id) })
-			.andWhere("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
-			.execute()
+
+		let triggers = await getRepository(Trigger)
+			.createQueryBuilder("trigger")
+			.where("channel_id = :channel_id_p", { channel_id_p: message_channel_id })
+			.getMany()
+		for (let trigger of triggers) {
+			if (await bcrypt.compare(message.author.id, trigger.author_hash_id)) {
+				await trigger.remove()
+			}
+		}
 
 		/*try {
 			//console.log("Hello")
@@ -690,17 +708,17 @@ let get_poll_from_channel_title = async function(message_channel_id: string, tit
 	return poll
 }
 
-let syntax_stop_reminder = function(message_content: string) {
+let syntax_stop_reminder = function(message_content: string): string {
 	return "\nExemple d'utilisation  :\n\`\`\`!as \"Vote lambda\"\`\`\`"
 	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
 }
 
-let syntax_results_reminder = function(message_content: string) {
+let syntax_results_reminder = function(message_content: string): string {
 	return "\nExemple d'utilisation  :\n\`\`\`!ar \"Vote lambda\"\`\`\`"
 	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
 }
 
-let delete_poll = async function(client: Client, poll: Poll) {
+let delete_poll = async function(client: Client, poll: Poll): Promise<Query_Result> {
 	if (!poll.close_poll(client)) {
 		//return "Poll did not close properly."
 		throw Query_Result.poll_not_close_properly
@@ -781,6 +799,8 @@ let delete_poll = async function(client: Client, poll: Poll) {
 		.where("id = :id_p", { id_p: poll.id })
 		.execute()
 	//console.log(await Poll.find())
+
+	return Query_Result.succeeded_create
 }
 
 let try_command_vote_action = async function(client: Client, message: Message, start_found: Query_Result): Promise<Query_Result> {
@@ -1042,7 +1062,7 @@ export let emoji_identifiers = Array.from(emoji_to_vote.keys())
 	return quick_sort(left).concat([center], quick_sort(right))
 }*/
 
-export let try_set_vote = async function(reaction: MessageReaction, user: User, client: Client) {
+export let try_set_vote = async function(reaction: MessageReaction, user: User, client: Client): Promise<void> {
 	let message = reaction.message
 	let message_id = message.id
 	let emoji_identifier = reaction.emoji.identifier
@@ -1129,46 +1149,87 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 			.where("elector.hash_id: hash_id_p", { hash_id_p: string_to_hash(user.id) })
 			.andWhere("poll.id: poll_id_p", { poll_id_p: poll.id })
 			.getOneOrFail()*/
-		elector = await getRepository(Elector)
+		let electors = await getRepository(Elector)
 			.createQueryBuilder("elector")
 			.leftJoinAndSelect("elector.poll", "poll")
-			.where("elector.hash_id = :hash_id_p", { hash_id_p: string_to_hash(user.id) })
-			.andWhere("poll.id = :poll_id_p", { poll_id_p: poll.id })
-			.getOneOrFail()
-		//console.log(elector)
-	} catch (error) {
-		///console.log("°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°")
-		try {
-			//console.log("I was there")
-			//console.log(await Elector.find({ relations: ["poll"] }))
-			//console.log(poll)
-			let i = (await getConnection()
-					.createQueryBuilder()
-					.insert()
-					.into(Elector)
-					.values({
-						hash_id: string_to_hash(user.id),
-						///hash_id: 1,
-						complete: Elector_Status.uncomplete,
-						poll: poll
-					})
-					.execute()).identifiers
-			//console.log(i)
-			elector = await getRepository(Elector)
-				.createQueryBuilder("elector")
-				.leftJoinAndSelect("elector.poll", "poll")
-				.where("elector.id = :elector_id_p", { elector_id_p: i[0].id })
-				.getOneOrFail()
-		} catch (error) {
-			throw Insert_Error.elector_insertion_failed
-			//console.log("Impossible 3")
+			// .where("elector.hash_id = :hash_id_p", { hash_id_p: string_to_hash(user.id) })
+			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+			.getMany()
+		for (let elector_p of electors) {
+			if (await bcrypt.compare(user.id, elector_p.hash_id) === true) {
+				elector = elector_p
+				throw Query_Result.found
+			}
 		}
-		/*elector.poll = poll
-		await getConnection().manager.save(elector)*/
-		/*elector = new Elector(string_to_hash(user.id), Elector_Status.uncomplete)
-		elector.poll = poll
-		await getConnection().manager.save(elector)*/
+		throw Query_Result.not_found
 	}
+	catch (error) {
+		if (error === Query_Result.not_found) {
+			try {
+				//console.log("I was there")
+				//console.log(await Elector.find({ relations: ["poll"] }))
+				//console.log(poll)
+				const saltRounds = 10
+				let i = (await getConnection()
+						.createQueryBuilder()
+						.insert()
+						.into(Elector)
+						.values({
+							hash_id: await bcrypt.hash(user.id, saltRounds),
+							///hash_id: 1,
+							complete: Elector_Status.uncomplete,
+							poll: poll
+						})
+						.execute()).identifiers
+				//console.log(i)
+				elector = await getRepository(Elector)
+					.createQueryBuilder("elector")
+					.leftJoinAndSelect("elector.poll", "poll")
+					.where("elector.id = :elector_id_p", { elector_id_p: i[0].id })
+					.getOneOrFail()
+			} catch (error) {
+				throw Insert_Error.elector_insertion_failed
+				//console.log("Impossible 3")
+			}
+		}
+	}
+	// } else {
+	// 	elector = result
+	// }
+	// console.log(elector)
+	// } catch (error) {
+	// 	///console.log("°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°")
+	// 	// try {
+	// 	// 	//console.log("I was there")
+	// 	// 	//console.log(await Elector.find({ relations: ["poll"] }))
+	// 	// 	//console.log(poll)
+	// 	// 	let i = (await getConnection()
+	// 	// 			.createQueryBuilder()
+	// 	// 			.insert()
+	// 	// 			.into(Elector)
+	// 	// 			.values({
+	// 	// 				hash_id: string_to_hash(user.id),
+	// 	// 				///hash_id: 1,
+	// 	// 				complete: Elector_Status.uncomplete,
+	// 	// 				poll: poll
+	// 	// 			})
+	// 	// 			.execute()).identifiers
+	// 	// 	//console.log(i)
+	// 	// 	elector = await getRepository(Elector)
+	// 	// 		.createQueryBuilder("elector")
+	// 	// 		.leftJoinAndSelect("elector.poll", "poll")
+	// 	// 		.where("elector.id = :elector_id_p", { elector_id_p: i[0].id })
+	// 	// 		.getOneOrFail()
+	// 	// } catch (error) {
+	// 	// 	throw Insert_Error.elector_insertion_failed
+	// 	// 	//console.log("Impossible 3")
+	// 	// }
+	// 	/*elector.poll = poll
+	// 	await getConnection().manager.save(elector)*/
+	// 	/*elector = new Elector(string_to_hash(user.id), Elector_Status.uncomplete)
+	// 	elector.poll = poll
+	// 	await getConnection().manager.save(elector)*/
+	// }
 	///console.log(elector)
 
 	//let elector_index = elector_registred(poll, user.id)
@@ -1195,17 +1256,53 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 	let candidate_rank = emoji_to_vote.get((emoji_identifier))
 	//let vote: Vote
 	try {
-		/*vote = */await getConnection()
-			.createQueryBuilder()
-			.leftJoinAndSelect("vote.elector", "elector")
+		let votes = await getRepository(Vote)
+			.createQueryBuilder("vote")
+			// .leftJoinAndSelect("vote.elector", "elector", "elector = :elector_p", { elector_p: elector })
 			.leftJoinAndSelect("vote.candidate", "candidate")
-			.update(Vote)
-			.set({ candidate_rank: candidate_rank })
-			.where("elector: elector_p", { elector_p: elector })
-			.andWhere("candidate :candidate_p", { candidate_p: candidate })
-			.execute()
+			.where("candidate.message_id = :candidate_message_id_p", { candidate_message_id_p: candidate.message_id })
+			.getMany()
+		// console.log(votes)
+		if (votes.length === 0) {
+			throw Query_Result.not_found
+		}
+		else {
+			let vote_id = votes[0].id
+			await getConnection()
+				.createQueryBuilder()
+				.update(Vote)
+				.set({ candidate_rank: candidate_rank })
+				.where("vote.id = :vote_id_p", { vote_id_p: vote_id })
+				.execute()
+		}
+			// .update(Vote)
+			// .set({ candidate_rank: candidate_rank })
+			// .execute()
 		//vote.candidate_rank = candidate_rank
-	} catch (error) {
+		// let vote = await getRepository(Vote)
+		// 	.createQueryBuilder("vote")
+		// 	.leftJoinAndSelect("vote.elector", "elector")
+		// 	.leftJoinAndSelect("vote.candidate", "candidate")
+		// 	.where("elector.hash_id = :elector_hash_id_p", { elector_hash_id_p: elector.hash_id })
+		// 	.andWhere("candidate.message_id = :candidate_message_id_p", { candidate_message_id_p: candidate.message_id })
+		// 	.getOneOrFail()
+		// // Vote found: update it
+		// vote.candidate_rank = candidate_rank
+		// await vote.save()
+
+		// let votes = await getRepository(Vote)
+		// 	.createQueryBuilder("vote")
+		// 	.leftJoinAndSelect("vote.candidate", "candidate")
+		// 	.where("candidate.message_id = :candidate_message_id_p", { candidate_message_id_p: candidate.message_id })
+		// 	.leftJoinAndSelect("vote.elector", "elector")
+		// 	.where("elector.id = :elector_id_p", { elector_id_p: elector.id })
+		// 	// .where("elector.hash_id = :hash_id_p", { hash_id_p: string_to_hash(user.id) })
+		// 	.getMany()
+		// console.log(await Vote.find())
+		// console.log(votes)
+		// throw Query_Result.not_found
+	} catch (error) { // No vote found : create it
+		// console.log(error)
 		await getConnection()
 			.createQueryBuilder()
 			.insert()
@@ -1254,6 +1351,7 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 		vote.elector = elector
 		vote.candidate = candidate*/
 	}
+	// console.log(await Vote.find({ relations: ["candidate"]}))
 	//await getConnection().manager.save(vote)
 	
 	/*vote_already_given = true
@@ -1282,7 +1380,7 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 		console.log("Snif 2")
 	}
 	//console.log(elector.poll)
-	///console.log(elector_votes, poll.candidates_count)
+	// console.log(elector_votes, poll.candidates_count)
 	////let votes: Array<Vote>
 	///console.log(await Elector.find({ relations: ["poll"] }))
 	/*let electors: Array<Elector>
@@ -1307,15 +1405,20 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 		/*if (!(elector.id in poll.electors_ids_having_voted)) {
 			poll.electors_ids_having_voted.push(elector.id)
 		}*/
+		// console.log("C'est fini")
 
 		if (elector.complete === Elector_Status.uncomplete) {
 			//elector.complete = Elector_Status.complete
-			await getConnection()
-				.createQueryBuilder()
-				.update(Elector)
-				.set({ complete: Elector_Status.complete })
-				.where("id = :id_p", { id_p: elector.id })
-				.execute()
+			try {
+				await getConnection()
+					.createQueryBuilder()
+					.update(Elector)
+					.set({ complete: Elector_Status.complete })
+					.where("id = :id_p", { id_p: elector.id })
+					.execute()
+			} catch (error) {
+				console.log(error)
+			}
 			///console.log(elector)
 		}
 

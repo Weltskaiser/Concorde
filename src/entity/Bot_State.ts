@@ -4,7 +4,7 @@ import { Bot } from "./Bot"
 @Entity()
 export abstract class Bot_State extends BaseEntity {
 	@PrimaryColumn()
-	author_hash_id: number
+	author_hash_id: string
 
 	@PrimaryColumn()
 	channel_id: string

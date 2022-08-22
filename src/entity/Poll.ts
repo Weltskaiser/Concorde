@@ -4,7 +4,7 @@ import { Elector } from "./Elector"
 import { Candidate } from "./Candidate"
 import { Elector_Status, emoji_identifiers } from "./Bot"
 import { Client, TextChannel, MessageEmbed } from "discord.js"
-const QuickChart = require('quickchart-js')
+const QuickChart = require("quickchart-js")
 
 export enum Poll_State {
 	open,
@@ -358,7 +358,7 @@ export class Poll extends BaseEntity {
 		//console.log("!")
 	}*/
 
-	update_introduction_message = async function(client: Client) {
+	update_introduction_message = async function(client: Client): Promise<void> {
 		let introduction_message = await (await client.channels.fetch(this.channel_id) as TextChannel).messages.fetch(this.introduction_message_id)
 		/*let candidates_count = (await getRepository(Candidate)
 			.createQueryBuilder("candidate")
@@ -378,7 +378,7 @@ export class Poll extends BaseEntity {
 		return true
 	}
 
-	display_results = async function(client: Client) {
+	display_results = async function(client: Client): Promise<(any[] | MessageEmbed)[]> {
 		let channel = await client.channels.fetch(this.channel_id) as TextChannel
 
 		/*let candidates_count = (await getRepository(Candidate)
@@ -470,7 +470,7 @@ export class Poll extends BaseEntity {
 			raw_candidates_names_p.push(c.name)
 		}
 		//console.log(raw_candidates_names_p)
-		const chart = new QuickChart();
+		let chart = new QuickChart();
 		chart.setConfig({
 			type: 'bar',
 			//data: { labels: this.candidates, datasets: [{ label: 'Nombre de duels gagnés par candidat', data: results_wins_counts }] },

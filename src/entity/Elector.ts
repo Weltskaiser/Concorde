@@ -10,7 +10,7 @@ export class Elector extends BaseEntity {
 	id: number
 	
 	@Column()
-	hash_id: number
+	hash_id: string
 
 	@Column()
 	complete: Elector_Status
@@ -28,7 +28,7 @@ export class Elector extends BaseEntity {
 		this.complete = complete
 	}*/
 
-	get_result = async function() {
+	get_result = async function(): Promise<Array<Array<number>>> {
 		let votes: Array<Vote>
 		try {
 			votes = await getRepository(Vote)
