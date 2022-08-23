@@ -1,7 +1,6 @@
-import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, PrimaryColumn, OneToMany, ManyToMany, ManyToOne } from "typeorm"
+import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, ManyToOne } from "typeorm"
 import { Candidate } from "./Candidate"
 import { Elector } from "./Elector"
-import { Poll } from "./Poll"
 
 @Entity()
 export class Vote extends BaseEntity {
@@ -16,10 +15,4 @@ export class Vote extends BaseEntity {
 
 	@ManyToOne(() => Candidate, candidate => candidate.votes)
 	candidate: Candidate
-
-	/*constructor(candidate_rank: number) {
-		super()
-
-		this.candidate_rank = candidate_rank
-	}*/
 }
