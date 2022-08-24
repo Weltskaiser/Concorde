@@ -1,10 +1,10 @@
-import { Entity, BaseEntity, PrimaryColumn } from "typeorm"
+import { Entity, BaseEntity, PrimaryColumn, Column } from "typeorm"
 
 @Entity()
 export class Trigger extends BaseEntity {
 	@PrimaryColumn()
 	author_hash_id: string
 
-	@PrimaryColumn()
+	@Column()
 	channel_id: string
 }

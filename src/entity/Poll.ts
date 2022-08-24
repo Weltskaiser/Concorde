@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, OneToMany, getRepository } from "typeorm"
 import { Elector } from "./Elector"
 import { Candidate } from "./Candidate"
-import { Elector_Status, emoji_identifiers } from "./Bot"
+import { Command_Error, Elector_Status, emoji_identifiers, Query_Result } from "./Bot"
 import { Client, TextChannel, MessageEmbed } from "discord.js"
 const QuickChart = require("quickchart-js")
 
@@ -17,16 +17,12 @@ let get_introduction_message_content = async function(title: string, candidates_
 		complete_electors_count = 0
 	} else {
 		let complete_electors: Array<Elector>
-		try {
-			complete_electors = await getRepository(Elector)
-				.createQueryBuilder("elector")
-				.leftJoinAndSelect("elector.poll", "poll")
-				.where("poll.id = :poll_id_p", { poll_id_p: poll_id })
-				.andWhere("elector.complete = :complete_p", { complete_p: Elector_Status.complete })
-				.getMany()
-		} catch (error) {
-			console.log("Snif 5")
-		}
+		complete_electors = await getRepository(Elector)
+			.createQueryBuilder("elector")
+			.leftJoinAndSelect("elector.poll", "poll")
+			.where("poll.id = :poll_id_p", { poll_id_p: poll_id })
+			.andWhere("elector.complete = :complete_p", { complete_p: Elector_Status.complete })
+			.getMany()
 		complete_electors_count = complete_electors.length
 	}
 	if (complete_electors_count === 0) {
@@ -56,14 +52,18 @@ let get_introduction_message_embed = async function(title: string, end_date_give
 		.setColor("#0099ff")
 		.setTitle("=== **" + title + "** ===")
 		.setDescription(introduction_message_content)
+	if (!introduction_message_embed) throw Query_Result.failed_launch_poll
 	return introduction_message_embed
 }
 
 export let launch_poll = async function(title: string, end_date_given: boolean, end_date: string, channel_id: string, state: Poll_State, candidates: Array<string>, client: Client): Promise<Array<string>> {
 	let channel = await client.channels.fetch(channel_id) as TextChannel
+	if (!channel) throw Command_Error.channel_not_found
 
 	let launching = true
-	let introduction_message = await channel.send({ embeds: [await get_introduction_message_embed(title, end_date_given, end_date, state, candidates.length, launching, 0)] })
+	let embed = await get_introduction_message_embed(title, end_date_given, end_date, state, candidates.length, launching, 0)
+	let introduction_message = await channel.send({ embeds: [embed] })
+	if (!introduction_message) throw Query_Result.failed_launch_poll
 	let introduction_message_id = introduction_message.id
 
 	let messages_ids = [introduction_message_id]
@@ -72,10 +72,12 @@ export let launch_poll = async function(title: string, end_date_given: boolean, 
 	for (let i = 0; i < candidates_count; i++) {
 		let candidate_message_content = candidates[i]
 		let candidate_message = await channel.send(candidate_message_content)
+		if (!candidate_message) throw Query_Result.failed_launch_poll
 		messages_ids.push(candidate_message.id)
 		
 		for (let j = 0; j < candidates_count; j++) {
-			await candidate_message.react(emoji_identifiers[j])
+			let reaction = await candidate_message.react(emoji_identifiers[j])
+			if (!reaction) throw Query_Result.failed_launch_poll
 		}
 	}
 
@@ -115,21 +117,23 @@ export class Poll extends BaseEntity {
 	electors: Array<Elector>
 
 	update_introduction_message = async function(client: Client): Promise<void> {
-		let introduction_message = await (await client.channels.fetch(this.channel_id) as TextChannel).messages.fetch(this.introduction_message_id)
+		let channel = await client.channels.fetch(this.channel_id) as TextChannel
+		let introduction_message = await channel.messages.fetch(this.introduction_message_id)
 		let launching = false
-		introduction_message.edit({ embeds: [await get_introduction_message_embed(this.title, this.end_date_given, this.end_date, this.state, this.candidates_count, launching, this.id)] })
+		let embed = await get_introduction_message_embed(this.title, this.end_date_given, this.end_date, this.state, this.candidates_count, launching, this.id)
+		let edit = await introduction_message.edit({ embeds: [embed] })
+		if (!channel || !introduction_message || !edit) throw Query_Result.poll_not_close_properly
 	}
 
-	close_poll = async function(client: Client): Promise<boolean> {
+	close_poll = async function(client: Client): Promise<void> {
 		this.state = Poll_State.closed
 
 		await this.update_introduction_message(client)
-		
-		return true
 	}
 
-	display_results = async function(client: Client): Promise<(any[] | MessageEmbed)[]> {
+	display_results = async function(client: Client): Promise<void> { // Promise<(any[] | MessageEmbed)[]>
 		let channel = await client.channels.fetch(this.channel_id) as TextChannel
+		if (!channel) throw Query_Result.poll_not_display_properly
 
 		let results_complete = new Array<Array<number>>(this.candidates_count)
 		for (let i = 0; i < results_complete.length; i++) {
@@ -137,16 +141,12 @@ export class Poll extends BaseEntity {
 			results_complete[i] = line
 		}
 		let complete_electors: Array<Elector>
-		try {
-			complete_electors = await getRepository(Elector)
-				.createQueryBuilder("elector")
-				.leftJoinAndSelect("elector.poll", "poll")
-				.where("poll.id = :poll_id_p", { poll_id_p: this.id })
-				.andWhere("elector.complete = :elector_complete_p", { elector_complete_p: Elector_Status.complete })
-				.getMany()
-		} catch (error) {
-			console.log("Snif 6")
-		}
+		complete_electors = await getRepository(Elector)
+			.createQueryBuilder("elector")
+			.leftJoinAndSelect("elector.poll", "poll")
+			.where("poll.id = :poll_id_p", { poll_id_p: this.id })
+			.andWhere("elector.complete = :elector_complete_p", { elector_complete_p: Elector_Status.complete })
+			.getMany()
 		for (let e = 0; e < complete_electors.length; e++) {
 			let elector_result = await complete_electors[e].get_result()
 
@@ -159,7 +159,8 @@ export class Poll extends BaseEntity {
 				lines += "\n" + line
 			}
 			lines += "\`\`\`"
-			channel.send(lines)
+			let message = await channel.send(lines)
+			if (!message) throw Query_Result.poll_not_display_properly
 
 			for (let i = 0; i < results_complete.length; i++) {
 				for (let j = 0; j < results_complete.length; j++) {
@@ -177,7 +178,8 @@ export class Poll extends BaseEntity {
 			lines += "\n" + line
 		}
 		lines += "\`\`\`"
-		channel.send(lines)
+		let message = await channel.send(lines)
+		if (!message) throw Query_Result.poll_not_display_properly
 
 		let results_wins_counts = []
 		for (let i = 0; i < results_complete.length; i++) {
@@ -191,16 +193,12 @@ export class Poll extends BaseEntity {
 		}
 
 		let candidates_names: Array<Candidate>
-		try {
-			candidates_names = await getRepository(Candidate)
-				.createQueryBuilder("candidate")
-				.leftJoinAndSelect("candidate.poll", "poll")
-				.select("name")
-				.where("poll.id = :poll_id_p", { poll_id_p: this.id })
-				.getRawMany()
-		} catch (error) {
-			console.log("Snif 7")
-		}
+		candidates_names = await getRepository(Candidate)
+			.createQueryBuilder("candidate")
+			.leftJoinAndSelect("candidate.poll", "poll")
+			.select("name")
+			.where("poll.id = :poll_id_p", { poll_id_p: this.id })
+			.getRawMany()
 		let raw_candidates_names_p: Array<string> = Array<string>()
 		for (let c of candidates_names) {
 			raw_candidates_names_p.push(c.name)
@@ -216,8 +214,9 @@ export class Poll extends BaseEntity {
 			.setImage(
 				chart.getUrl()
 			)
-		channel.send({ embeds: [chartEmbed] });
+		let embed = await channel.send({ embeds: [chartEmbed] });
+		if (!embed) throw Query_Result.poll_not_display_properly
 
-		return [results_complete, results_wins_counts, chartEmbed]
+		// return [results_complete, results_wins_counts, chartEmbed]
 	}
 }
