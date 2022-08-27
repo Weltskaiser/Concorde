@@ -117,7 +117,8 @@ export enum Command_Error {
 	first_character_not_n = 12,
 	already_poll_in_channel_having_title = 13,
 	not_enough_lines = 14,
-	title_not_found = 15
+	title_not_found = 15,
+	unallowed_operation = 16
 }
 
 /*interface error_E {
@@ -506,7 +507,7 @@ let try_command_poll_action_back = async function(client: Client, content: strin
 			let poll = await get_poll_from_channel_title(channel_id, command[1])
 
 			if (!await bcrypt.compare(author_id, poll.author_hash_id)) {
-				return
+				return Command_Error.unallowed_operation
 			}
 
 			await delete_poll(client, poll)
@@ -541,7 +542,7 @@ let try_command_poll_action_back = async function(client: Client, content: strin
 			let poll = await get_poll_from_channel_title(channel_id, command[1])
 
 			if (!await bcrypt.compare(author_id, poll.author_hash_id)) {
-				return
+				return Command_Error.unallowed_operation
 			}
 
 			await poll.display_results(client)
@@ -592,8 +593,11 @@ let try_command_poll_action = async function(client: Client, content: string, ch
 			} case Command_Error.title_not_found: {
 				author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(content))
 				return Concorde_Result.command_error
+			} case Command_Error.unallowed_operation: {
+				author.send("Erreur. Seul le créateur du scrutin est autorisé à effectuer une action sur ce scrutin." + syntax_results_reminder(content))
+				return Concorde_Result.command_error
 			} default: {
-				throw new Error("Unexpected return value for try_poll_action_back")
+				throw new Error("Unexpected return value for try_command_poll_action_back")
 			}
 		}
 	}
