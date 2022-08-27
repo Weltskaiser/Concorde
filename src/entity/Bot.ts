@@ -78,9 +78,8 @@ export class Bot {
 				if (this.client.user.id === user.id) {
 					return
 				}
-				throw new Error("Oups")
+				// throw new Error("Oups")
 
-				// try {
 				await try_set_vote(reaction, user, this.client)
 			} catch (error) {
 				await this.crash_log(reaction.message)
