@@ -34,13 +34,13 @@ let get_introduction_message_content = async function(title: string, candidates_
 	} else {
 		declinative_form = complete_electors_count + " personnes ont voté"
 	}
-	let end_date_content = end_date_given === true ? "\n—> Fin prévue : `" + end_date + "` <—" : ""
+	let end_date_content = end_date_given === true ? "\n—> Fin prévue : __**" + end_date + "**__ <—" : ""
 
 	let state_content = state === Poll_State.open ? "Ouvert" : "Fermé"
 	
 	let introduction_message_content =/* "=== **" + title + "** ==="
 	//+ "\n—> `" + this.state + "` – _" + declinative_form + "_ <—"
-	+ "\n" +*/" —> `" + state_content + "` – _" + declinative_form + "_ <—"
+	+ "\n" +*/" —> __**" + state_content + "**__ – _" + declinative_form + "_ <—"
 	+ end_date_content
 	+ "\nClassez chaque candidat (1 = préféré ; " + candidates_count + " = le moins apprécié ; vous pouvez attribuer une même note à plusieurs candidats) :"
 	return introduction_message_content		//this.candidates.length
