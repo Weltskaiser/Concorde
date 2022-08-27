@@ -1,120 +1,96 @@
 import { Client, Message, TextChannel, User, MessageReaction, ReactionUserManager } from 'discord.js'
-import { Db, getConnection, getRepository, QueryResult } from "typeorm"
 import { Poll_State,launch_poll, Poll } from "./Poll"
 import { Trigger } from "./Trigger"
 import { Elector } from './Elector'
 import { Vote } from './Vote'
 import { Candidate } from "./Candidate"
 import * as bcrypt from "bcrypt"
+import { AppDataSource } from '../app'
+
+const saltRounds = 10
 
 export class Bot {
 	// private client: Client
 	public client: Client
 	private self_respond_counter: number
 
+	private Nicolas: User
+	private discord_crash_message: string
+
 	constructor () {
 		this.client = new Client({ intents: ["GUILDS", "GUILD_MESSAGES", "GUILD_MESSAGE_REACTIONS", "DIRECT_MESSAGES"], partials: ["REACTION", "USER", "MESSAGE", "CHANNEL"] })
 		this.self_respond_counter = 0
 
-		this.client.on('ready', () => {
+		this.client.on('ready', async () => {
 			console.log(`Hé !! Logged in as ${this.client.user.tag}!`)
+			this.Nicolas = await this.client.users.fetch('355077745744543744')
+			this.discord_crash_message = `Concorde a crashé ! ${this.Nicolas}\n`
 		})
-
 		
 		this.client.on('messageCreate', async (message: Message) => {
-			if (message.author.id === this.client.user.id) {
-				if (this.self_respond_counter === 0) {
+			try {
+				if (message.author.id === this.client.user.id) {
+					if (this.self_respond_counter === 0) {
+						return
+					} else {
+						this.self_respond_counter--
+					}
+				}
+
+				// Check fan service messages
+				if (await try_democratie_amour(message) === true) {
 					return
-				} else {
-					this.self_respond_counter--
 				}
-			}
 
-			// Check fan service messages
-			if (await try_democratie_amour(message) === true) {
-				return
-			}
+				// Check Concorde is used on servers only
+				if (await try_send_dm_unallowed(message) === true) {
+					return
+				}
 
-			// Check Concorde is used on servers only
-			let type = message.channel.type
-			if (type === "DM") {
-				message.author.send("Concorde ne fonctionne que sur les serveurs ! C'est compliqué de faire un vote dans une discussion de message privé...")
-				return
-			}
+				// Check if the message author is triggering Concorde for creating a poll
+				let command_trigger_r = await try_command_trigger(message.content, message.channelId, message.author.id)
+				if (command_trigger_r === Concorde_Result.succeeded_create) { // The command has already done everything it is supposed to do
+					message.delete()
+					return
+				}
+				// From here, command_trigger_r = Concorde_Result.found || Concorde_Result.not_trigger_command
 
-			// Error message : mention Nicolas
-			let Nicolas = await this.client.users.fetch('355077745744543744')
-			let error_message = `Concorde a crashé ! ${Nicolas}\n`
+				// Check if the message author is trying to create a poll, only if an existing trigger has been found
+				if (command_trigger_r === Concorde_Result.found) {
+					await start_poll(this.client, message.content, message.author.id, message.channelId)
+					// The command has already done everything it is supposed to do.
+					message.delete()
+					return
+				}
+				// From here, command_trigger_r = Concorde_Result.not_trigger_command
 
-			// Check if the message author is triggering Concorde for creating a poll
-			let command_trigger_r: Query_Result
-			try {
-				command_trigger_r = await try_command_trigger(message.content, message.channelId, message.author.id)
+				// Check if the message author is trying to close a poll
+				let command_poll_action_r = await try_command_poll_action(this.client, message.content, message.channelId, message.author.id)
+				// } catch (error) {
+				// 	switch (error) {
+				// 		case Concorde_Result.poll_not_close_properly: {
+				// 			console.log("Proper poll close failed")
+				// 			throw error
+				// 		} case Concorde_Result.poll_not_display_properly: {
+				// 			console.log("Proper poll display failed")
+				// 			throw error
+				// 		} case DB_Result.failed_delete: {
+				// 			console.log("Failed deleting votes, candidates, electors or poll")
+				// 			throw error
+				// 		} default: {
+				// 			throw error
+				// 		}
+				// 	}
+				// }
+				if (command_poll_action_r === Concorde_Result.succeeded_create || command_poll_action_r === Concorde_Result.command_error) {
+					// The command has already done everything it is supposed to do
+					message.delete()
+					return
+				}
+				// From here, command_poll_action_r = Concorde_Result.not_a_command
 			} catch (error) {
-				message.channel.send(error_message)
-				switch (error) {
-					case DB_Result.failed_insert: {
-						console.log("Error while inserting trigger.")
-						throw error
-					} default: {
-						throw error
-					}
-				}
-			}
-			if (command_trigger_r === Query_Result.succeeded_create) { // The command has already done everything it is supposed to do
-				message.delete()
-				return
-			}
-			// From here, command_trigger_r = Query_Result.found || Query_Result.not_trigger_command
-
-			// Check if the message author is trying to create a poll, only if an existing trigger has been found
-			if (command_trigger_r === Query_Result.found) {
-				let start_poll_r: Query_Result
-				try {
-					start_poll_r = await start_poll(this.client, message.content, message.author.id, message.channelId)
-				} catch (error) {
-					switch (error) {
-						case DB_Result.failed_insert: {
-							console.log("Failed inserting poll or candidates")
-							throw error
-						} case Query_Result.failed_launch_poll: {
-							console.log("Proper poll creation failed")
-							throw error
-						} default: {
-							throw error
-						}
-					}
-				}
-				// The command has already done everything it is supposed to do.
-				message.delete()
-				return
-			}
-			// From here, command_trigger_r = Query_Result.not_trigger_command
-
-			// Check if the message author is trying to close a poll
-			let command_poll_action_r: Query_Result
-			try {
-				command_poll_action_r= await try_command_poll_action(this.client, message.content, message.channelId, message.author.id)
-			} catch (error) {
-				switch (error) {
-					case Query_Result.poll_not_close_properly: {
-						console.log("Proper poll close failed")
-						throw error
-					} case Query_Result.poll_not_display_properly: {
-						console.log("Proper poll display failed")
-						throw error
-					} case DB_Result.failed_delete: {
-						console.log("Failed deleting votes, candidates, electors or poll")
-						throw error
-					} default: {
-						throw error
-					}
-				}
-			}
-			if (command_poll_action_r === Query_Result.succeeded_create || command_poll_action_r === Query_Result.command_error) {
-				// The command has already done everything it is supposed to do
-				message.delete()
-				return
+				await message.channel.send(this.discord_crash_message)
+				throw error
 			}
 		})
 
@@ -123,24 +99,24 @@ export class Bot {
 				return
 			}
 
-			try {
-				await try_set_vote(reaction.message.id, reaction.emoji.identifier, reaction.users, user, this.client)
-			} catch (error) {
-				switch (error) {
-					case DB_Result.failed_update: {
-						console.log("Failed updating elector.")
-						throw error
-					} case DB_Result.failed_insert: {
-						console.log("Failed inserting elector.")
-						throw error
-					} case Query_Result.failed_vote: {
-						console.log("Failed voting")
-						throw error
-					} default: {
-						throw error
-					}
-				}
-			}
+			// try {
+			await try_set_vote(reaction, user, this.client)
+			// } catch (error) {
+			// 	switch (error) {
+			// 		case DB_Result.failed_update: {
+			// 			console.log("Failed updating elector.")
+			// 			throw error
+			// 		} case DB_Result.failed_insert: {
+			// 			console.log("Failed inserting elector.")
+			// 			throw error
+			// 		} case Concorde_Result.failed_vote: {
+			// 			console.log("Failed voting")
+			// 			throw error
+			// 		} default: {
+			// 			throw error
+			// 		}
+			// 	}
+			// }
 		})
 	}
 
@@ -157,43 +133,43 @@ export class Bot {
 	}
 }
 
-export let try_democratie_amour = async function(message: Message): Promise<boolean> {
-	let message_sent: Message | undefined
-
-	if (message.content === `La démocratie à Grignon c'est quoi ?`) {
-		message_sent = await message.channel.send(`La démocratie à Grignon c'est le BDE et c'est que de l'amour, n'est-ce pas ?`)
-	}
-	
-	return message_sent !== undefined
+enum Bcrypt_Result {
+	failed_hash = 0,
+	failed_compare = 1
 }
 
-
-
-
-export enum Query_Result {
-	found,
-	not_found,
-	// failed_create,
-	succeeded_create,
-	failed_launch_poll,
-	failed_vote,
-	poll_not_close_properly,
-	poll_not_display_properly,
+export enum Concorde_Result {
+	failed = 2,
+	found = 3,
+	not_found = 4,
+	failed_create = 5,
+	succeeded_create = 6,
+	failed_launch_poll = 7,
+	failed_vote = 8,
+	poll_not_close_properly = 9,
+	poll_not_display_properly = 10,
 	// not_a_command,
-	not_trigger_command,
-	not_vote_action_command,
-	command_error
+	not_trigger_command = 11,
+	not_vote_action_command = 12,
+	not_vote = 99,
+	command_error = 13
+}
+
+enum Discord_Result {
+	failed_send = 14
 }
 
 enum DB_Result {
-	found,
-	not_found,
-	failed_insert,
+	found = 15,
+	not_found = 16,
+	failed_insert = 17,
 	// succeeded_insert,
-	failed_update,
+	failed_update = 18,
 	// succeeded_update,
-	failed_delete
-	// succeeded_delete
+	failed_delete = 19,
+	// succeeded_delete,
+	failed_select = 20,
+	// succeeded_select
 }
 
 // enum Insert_Error {
@@ -203,16 +179,16 @@ enum DB_Result {
 // }
 
 export enum Command_Error {
-	empty_line = 0,
-	unclosed_quotation_mark = 1,
-	no_space_or_line_break_after_quotation_mark = 2,
-	not_enough_elements_in_first_line = 3,
-	too_many_elements_in_first_line = 4,
-	first_character_not_n = 5,
-	already_poll_in_channel_having_title = 6,
-	not_enough_lines = 7,
-	title_not_found = 8,
-	channel_not_found = 9
+	empty_line = 21,
+	unclosed_quotation_mark = 22,
+	no_space_or_line_break_after_quotation_mark = 23,
+	not_enough_elements_in_first_line = 24,
+	too_many_elements_in_first_line = 25,
+	first_character_not_n = 26,
+	already_poll_in_channel_having_title = 27,
+	not_enough_lines = 28,
+	title_not_found = 29,
+	channel_not_found = 30
 }
 
 /*interface error_E {
@@ -294,30 +270,44 @@ let cut_command = function(string: string): string[] {
 	return cut_string
 }
 
-let syntax_start_reminder = function(message_content: string): string {
-	return "\nExemple d'utilisation (la date est optionnelle) :\n\`\`\`n \"Vote lambda\" \"Vendredi 24 décembre 2021, 12 h 34 m 56 s\"\nCandidat A\nCandidat B\nCandidat C\`\`\`"
-	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
-	+ "\nPour arrêter de tenter de lancer un vote :\n\`\`\`\n!ac\`\`\`"
+export let try_democratie_amour = async function(message: Message): Promise<boolean> {
+	if (message.content === `La démocratie à Grignon c'est quoi ?`) {
+		await message.channel.send(`La démocratie à Grignon c'est le BDE et c'est que de l'amour, n'est-ce pas ?`)
+		return true
+	}
+	return false
 }
 
-let look_for_trigger = async function(message_channel_id: string, message_author_id: string): Promise<DB_Result> {
-	let triggers = await getRepository(Trigger)
+let try_send_dm_unallowed = async function(message: Message): Promise<boolean> {
+	let type = message.channel.type
+	if (type === "DM") {
+		await message.author.send("Concorde ne fonctionne que sur les serveurs ! C'est compliqué de faire un vote dans une discussion de message privé...")
+		return true
+	}
+	return false
+}
+
+let look_for_trigger = async function(message_channel_id: string, message_author_id: string): Promise<Concorde_Result> {
+	let triggers = await AppDataSource.getRepository(Trigger)
 		.createQueryBuilder("trigger")
 		// .where("trigger.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
 		.where("trigger.channel_id = :channel_id_p", { channel_id_p: message_channel_id })
 		.getMany()
+	
 	for (let trigger of triggers) {
 		if (await bcrypt.compare(message_author_id, trigger.author_hash_id)) {
-			return DB_Result.found
+			return Concorde_Result.found
 		}
 	}
-	return DB_Result.not_found
+
+	return Concorde_Result.not_found
 }
 
-let try_command_trigger = async function(content: string, channel_id: string, author_id: string): Promise<Query_Result> {
-	if (await look_for_trigger(channel_id, author_id) === DB_Result.found) {
+let try_command_trigger = async function(content: string, channel_id: string, author_id: string): Promise<Concorde_Result> {
+	let trigger_found = await look_for_trigger(channel_id, author_id)
+	if (trigger_found === Concorde_Result.found) {
 		if (content === "!ac") { /*!arrêter Concorde*/
-			let triggers = await getRepository(Trigger)
+			let triggers = await AppDataSource.getRepository(Trigger)
 				.createQueryBuilder("trigger")
 				.where("channel_id = :channel_id_p", { channel_id_p: channel_id })
 				.getMany()
@@ -326,17 +316,17 @@ let try_command_trigger = async function(content: string, channel_id: string, au
 					await trigger.remove()
 				}
 			}
-			return Query_Result.succeeded_create
+			return Concorde_Result.succeeded_create
 		} else {
-			return Query_Result.found
+			return Concorde_Result.found
 		}
 	} else { // No trigger found
 		if (content !== "!cc") { /*!commencer Concorde*/
-			return Query_Result.not_trigger_command
+			return Concorde_Result.not_trigger_command
 		}
 
 		// Delete every potential trigger for every other channel
-		let triggers = await getRepository(Trigger)
+		let triggers = await AppDataSource.getRepository(Trigger)
 			.createQueryBuilder("trigger")
 			.getMany()
 		for (let trigger of triggers) {
@@ -346,9 +336,7 @@ let try_command_trigger = async function(content: string, channel_id: string, au
 		}
 
 		// Now put the trigger is on the current channel
-		const saltRounds = 10
-		await getConnection()
-			.createQueryBuilder()
+		await AppDataSource.createQueryBuilder()
 			.insert()
 			.into(Trigger)
 			.values({
@@ -357,21 +345,27 @@ let try_command_trigger = async function(content: string, channel_id: string, au
 			})
 			.execute()
 
-		return Query_Result.succeeded_create
+		return Concorde_Result.succeeded_create
 	}
 }
 
-export let start_poll = async function(client: Client, content: string, author_id: string, channel_id: string) : Promise<Query_Result> {
-	// if (trigger_found === Query_Result.found) {
+let syntax_start_reminder = function(message_content: string): string {
+	return "\nExemple d'utilisation (la date est optionnelle) :\n\`\`\`n \"Vote lambda\" \"Vendredi 24 décembre 2021, 12 h 34 m 56 s\"\nCandidat A\nCandidat B\nCandidat C\`\`\`"
+	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
+	+ "\nPour arrêter de tenter de lancer un vote :\n\`\`\`\n!ac\`\`\`"
+}
+
+export let start_poll_back = async function(client: Client, content: string, author_id: string, channel_id: string): Promise<Concorde_Result | Command_Error> {
+	// if (trigger_found === Concorde_Result.found) {
 	// 	try {
 	// 		await getRepository(Poll)
 	// 			.createQueryBuilder("poll")
 	// 			.where("poll.channel_id = :poll_channel_id_p", { poll_channel_id_p: message.channelId })
 	// 			.getOneOrFail()
 	// 	} catch (error) {
-	// 		return Query_Result.not_a_command
+	// 		return Concorde_Result.not_a_command
 	// 	}
-	// 	return Query_Result.found
+	// 	return Concorde_Result.found
 	// } else {
 	// let message_content = message.content
 	// let message_author = message.author
@@ -389,14 +383,12 @@ export let start_poll = async function(client: Client, content: string, author_i
 		if (first_line_w[0] !== "n") throw Command_Error.first_character_not_n
 
 		let title = first_line_w[1]
-		let polls_in_channel_having_title = await getRepository(Poll)
+		let polls_in_channel_having_title = await AppDataSource.getRepository(Poll)
 			.createQueryBuilder("poll")
 			.where("poll.title = :title_p", { title_p: title })
 			.andWhere("poll.channel_id = :channel_id_p", { channel_id_p: channel_id })
 			.getMany()
-		if (polls_in_channel_having_title.length !== 0) {
-			throw Command_Error.already_poll_in_channel_having_title
-		}
+		if (polls_in_channel_having_title.length !== 0) throw Command_Error.already_poll_in_channel_having_title
 
 		let end_date_given: boolean
 		let end_date: string
@@ -415,111 +407,68 @@ export let start_poll = async function(client: Client, content: string, author_i
 		}
 
 		let state = Poll_State.open
-		let messages_ids: string[]
-		try {
-			messages_ids = await launch_poll(title, end_date_given, end_date, channel_id, state, candidates, client)
-		} catch (error) {
-			console.log("Failed create poll")
-			switch (error) {
-				case Command_Error.channel_not_found: {
-					console.log("Channel id provided not found")
-					throw error
-				} default: {
-					throw error
-				}
-			}
-		}
-		let poll: Poll
-		try {
-			poll = await getRepository(Poll)
-				.createQueryBuilder("poll")
-				.where("poll.id = :poll_id_p", { poll_id_p: (await getConnection()
-					.createQueryBuilder()
-					.insert()
-					.into(Poll)
-					.values({
-						title: title,
-						end_date_given: end_date_given,
-						end_date: end_date,
-						channel_id: channel_id,
-						introduction_message_id: messages_ids[0],
-						state: state,
-						candidates_count: candidates.length
-					})
-					.execute()).identifiers[0].id })
-				.getOneOrFail()
-		} catch (error) {
-			throw DB_Result.failed_insert
-		}
+		let messages_ids = await launch_poll(title, end_date_given, end_date, channel_id, state, candidates, client)
+		let poll = await AppDataSource.getRepository(Poll)
+			.createQueryBuilder("poll")
+			.where("poll.id = :poll_id_p", { poll_id_p: (await AppDataSource
+				.createQueryBuilder()
+				.insert()
+				.into(Poll)
+				.values({
+					author_hash_id: await bcrypt.hash(author_id, saltRounds),
+					title: title,
+					end_date_given: end_date_given,
+					end_date: end_date,
+					channel_id: channel_id,
+					introduction_message_id: messages_ids[0],
+					state: state,
+					candidates_count: candidates.length
+				})
+				.execute()).identifiers[0].id })
+			.getOneOrFail()
 
 		for (let i = 0; i < candidates.length; i++) {				
-			let candidate: Candidate
-			try {
-				candidate = await getRepository(Candidate)
-					.createQueryBuilder("candidate")
-					.where("candidate.message_id = :message_id_p", { message_id_p: (await getConnection()
-						.createQueryBuilder()
-						.insert()
-						.into(Candidate)
-						.values({
-							name: candidates[i],
-							order: i,
-							message_id: messages_ids[i + 1],
-							poll: poll
-						})
-						.execute()).identifiers[0].message_id })
-					.getOneOrFail()
-			} catch (error) {
-				throw DB_Result.failed_insert
-			}
-			await getConnection().manager.save(candidate)
+			let candidate = await AppDataSource.getRepository(Candidate)
+				.createQueryBuilder("candidate")
+				.where("candidate.message_id = :message_id_p", { message_id_p: (await AppDataSource
+					.createQueryBuilder()
+					.insert()
+					.into(Candidate)
+					.values({
+						name: candidates[i],
+						message_id: messages_ids[i + 1],
+						order: i,
+						poll: poll
+					})
+					.execute()).identifiers[0].message_id })
+				.getOneOrFail()
+			await AppDataSource.manager.save(candidate)
 		}
 	} catch (error) {
-		if (error === Query_Result.failed_launch_poll || error === DB_Result.failed_insert) {
-			throw error
-		}
-		// Until there, existence of author id was not checked for the tests.
-		let author = await client.users.fetch(author_id)
-		if (author !== undefined) {
-			switch (error) {
-				case Command_Error.empty_line: {
-					author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.empty_line: {
-					author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.unclosed_quotation_mark: {
-					author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.no_space_or_line_break_after_quotation_mark: {
-					author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.not_enough_elements_in_first_line: {
-					author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir au moins 2 : l'élément \"n\" et le titre du vote)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.too_many_elements_in_first_line: {
-					author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir au maximum que 3 : l'élément \"n\", le titre du vote et la date prévue de fin)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.first_character_not_n: {
-					author.send("Erreur. La commande est incorrecte : le premier élément doit être l'élément \"n\"." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.already_poll_in_channel_having_title: {
-					author.send("Erreur. La commande est incorrecte : un vote possédant ce titre est déjà présent dans ce salon." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.not_enough_lines: {
-					author.send("Erreur. La commande est incomplète : elle doit faire minimum 2 lignes (aucun candidat n'a été fourni)." + syntax_start_reminder(content))
-					return Query_Result.command_error
-				} default: {
-					// console.log("I exist.t")
-					throw error
-				}
+		switch (error) {
+			case Command_Error.empty_line: {
+				return error
+			} case Command_Error.unclosed_quotation_mark: {
+				return error
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
+				return error
+			} case Command_Error.not_enough_elements_in_first_line: {
+				return error
+			} case Command_Error.too_many_elements_in_first_line: {
+				return error
+			} case Command_Error.first_character_not_n: {
+				return error
+			} case Command_Error.already_poll_in_channel_having_title: {
+				return error
+			} case Command_Error.not_enough_lines: {
+				return error
+			} default: {
+				throw error
 			}
-		} else { // False author_id : we won't check every case, unitary tests don't go so far
-			return Query_Result.command_error
 		}
 	}
 
-	let triggers = await getRepository(Trigger)
+	let triggers = await AppDataSource.getRepository(Trigger)
 		.createQueryBuilder("trigger")
 		.where("channel_id = :channel_id_p", { channel_id_p: channel_id })
 		.getMany()
@@ -528,13 +477,52 @@ export let start_poll = async function(client: Client, content: string, author_i
 			await trigger.remove()
 		}
 	}
-	return Query_Result.succeeded_create
+	return Concorde_Result.succeeded_create
+}
+
+let start_poll = async function(client: Client, content: string, author_id: string, channel_id: string): Promise<Concorde_Result> {
+	let back_result = await start_poll_back(client, content, author_id, channel_id)
+	if (back_result !== Concorde_Result.succeeded_create) {
+		let author = await client.users.fetch(author_id)
+		switch (back_result) {
+			case Command_Error.empty_line: {
+				author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.empty_line: {
+				author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.unclosed_quotation_mark: {
+				author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
+				author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.not_enough_elements_in_first_line: {
+				author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir au moins 2 : l'élément \"n\" et le titre du vote)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.too_many_elements_in_first_line: {
+				author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir au maximum que 3 : l'élément \"n\", le titre du vote et la date prévue de fin)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.first_character_not_n: {
+				author.send("Erreur. La commande est incorrecte : le premier élément doit être l'élément \"n\"." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.already_poll_in_channel_having_title: {
+				author.send("Erreur. La commande est incorrecte : un vote possédant ce titre est déjà présent dans ce salon." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.not_enough_lines: {
+				author.send("Erreur. La commande est incomplète : elle doit faire minimum 2 lignes (aucun candidat n'a été fourni)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} default: {
+				throw -1
+			}
+		}
+	}
 }
 
 let get_poll_from_channel_title = async function(channel_id: string, title: string): Promise<Poll> {
 	let poll: Poll
 	try {
-		poll = await getRepository(Poll)
+		poll = await AppDataSource.getRepository(Poll)
 			.createQueryBuilder("poll")
 			.where("poll.channel_id = :channel_id_p", { channel_id_p: channel_id })
 			.andWhere("poll.title = :poll_title_p", { poll_title_p: title})
@@ -555,55 +543,49 @@ let syntax_results_reminder = function(message_content: string): string {
 	+ "\nVotre commande qui a échoué :\n\`\`\`\n" + message_content + "\`\`\`"
 }
 
-let delete_poll = async function(client: Client, poll: Poll): Promise<Query_Result> {
+let delete_poll = async function(client: Client, poll: Poll): Promise<Concorde_Result> {
 	poll.close_poll(client)
 
-	try {
-		let votes_to_delete_ids = await getRepository(Vote)
-			.createQueryBuilder("vote")
-			.leftJoinAndSelect("vote.elector", "elector")
-			.leftJoinAndSelect("elector.poll", "poll")
-			.select("vote.id")
-			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-			.getRawMany()
-		for (let raw_vote of votes_to_delete_ids) {
-			await getConnection()
-				.createQueryBuilder()
-				.delete()
-				.from(Vote)
-				.where("id = :id_p", { id_p: raw_vote.vote_id })
-				.execute()
-		}
-		await getConnection()
+	let votes_to_delete_ids = await AppDataSource.getRepository(Vote)
+		.createQueryBuilder("vote")
+		.leftJoinAndSelect("vote.elector", "elector")
+		.leftJoinAndSelect("elector.poll", "poll")
+		.select("vote.id")
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		.getRawMany()
+	for (let raw_vote of votes_to_delete_ids) {
+		await AppDataSource
 			.createQueryBuilder()
 			.delete()
-			.from(Candidate)
-			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+			.from(Vote)
+			.where("id = :id_p", { id_p: raw_vote.vote_id })
 			.execute()
-
-		await getConnection()
-			.createQueryBuilder()
-			.delete()
-			.from(Elector)
-			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-			.execute()
-
-		await getConnection()
-			.createQueryBuilder()
-			.delete()
-			.from(Poll)
-			.where("id = :id_p", { id_p: poll.id })
-			.execute()
-	} catch (error) {
-		throw DB_Result.failed_delete
 	}
 
-	return Query_Result.succeeded_create
+	await AppDataSource.createQueryBuilder()
+		.delete()
+		.from(Candidate)
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		.execute()
+
+	await AppDataSource.createQueryBuilder()
+		.delete()
+		.from(Elector)
+		.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		.execute()
+
+	await AppDataSource.createQueryBuilder()
+		.delete()
+		.from(Poll)
+		.where("id = :id_p", { id_p: poll.id })
+		.execute()
+
+	return Concorde_Result.succeeded_create
 }
 
-let try_command_poll_action = async function(client: Client, content: string, channel_id: string, author_id: string): Promise<Query_Result> {
-	// if (start_found !== Query_Result.found) {
-	// 	return Query_Result.not_a_command
+let try_command_poll_action_back = async function(client: Client, content: string, channel_id: string, author_id: string): Promise<Concorde_Result | Command_Error> {
+	// if (start_found !== Concorde_Result.found) {
+	// 	return Concorde_Result.not_a_command
 	// }
 
 	// let message_content = message.content
@@ -618,40 +600,41 @@ let try_command_poll_action = async function(client: Client, content: string, ch
 
 			let poll = await get_poll_from_channel_title(channel_id, command[1])
 
+			if (!await bcrypt.compare(author_id, poll.author_hash_id)) {
+				return
+			}
+
 			await delete_poll(client, poll)
 
-			return Query_Result.succeeded_create
+			return Concorde_Result.succeeded_create
 		}
 	} catch (error) {
-		if (error === Query_Result.poll_not_close_properly || error === DB_Result.failed_delete) {
-			throw error
-		}
-		// Until there, existence of author id was not checked for the tests.
-		let author = await client.users.fetch(author_id)
-		if (author !== undefined) {
-			switch (error) {
-				case Command_Error.unclosed_quotation_mark: {
-					author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_stop_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.no_space_or_line_break_after_quotation_mark: {
-					author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_stop_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.not_enough_elements_in_first_line: {
-					author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!as\" et le titre du vote)." + syntax_stop_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.too_many_elements_in_first_line: {
-					author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!as\" et le titre du vote." + syntax_stop_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.title_not_found: {
-					author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(content))
-					return Query_Result.command_error
-				} default: {
-					throw error
-				}
+		switch (error) {
+			case Command_Error.unclosed_quotation_mark: {
+				return error
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
+				return error
+			} case Command_Error.not_enough_elements_in_first_line: {
+				return error
+			} case Command_Error.too_many_elements_in_first_line: {
+				return error
+			} case Command_Error.title_not_found: {
+				return error
+			} default: {
+				throw error
 			}
-		} else { // False author_id : we won't check every case, unitary tests don't go so far
-			return Query_Result.command_error
 		}
+		// if (error === Concorde_Result.poll_not_close_properly || error === DB_Result.failed_delete) {
+		// 	throw error
+		// }
+		// // Until there, existence of author id was not checked for the tests.
+		// let author = await client.users.fetch(author_id)
+		// if (author !== undefined) {
+			
+		// } else { // False author_id : we won't check every case, unitary tests don't go so far
+		// 	console.log("Caution, is it a test?")
+		// 	return Concorde_Result.command_error
+		// }
 	}
 
 	try {
@@ -663,46 +646,75 @@ let try_command_poll_action = async function(client: Client, content: string, ch
 
 			let poll = await get_poll_from_channel_title(channel_id, command[1])
 
+			if (!await bcrypt.compare(author_id, poll.author_hash_id)) {
+				return
+			}
+
 			await poll.display_results(client)
 
 			// Now close the poll
 			await delete_poll(client, poll)
 
-			return Query_Result.succeeded_create
+			return Concorde_Result.succeeded_create
 		}
 	} catch (error) {
-		if (error === Query_Result.poll_not_close_properly || error === DB_Result.failed_delete || error === Query_Result.poll_not_display_properly) {
-			throw error
-		}
-		// Until there, existence of author id was not checked for the tests.
-		let author = await client.users.fetch(author_id)
-		if (author !== undefined) {
-			switch (error) {
-				case Command_Error.unclosed_quotation_mark: {
-					author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_results_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.no_space_or_line_break_after_quotation_mark: {
-					author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_results_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.not_enough_elements_in_first_line: {
-					author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!ar\" et le titre du vote)." + syntax_results_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.too_many_elements_in_first_line: {
-					author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!ar\" et le titre du vote." + syntax_results_reminder(content))
-					return Query_Result.command_error
-				} case Command_Error.title_not_found: {
-					author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(content))
-					return Query_Result.command_error
-				} default: {
-					throw error
-				}
+		switch (error) {
+			case Command_Error.unclosed_quotation_mark: {
+				return error
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
+				return error
+			} case Command_Error.not_enough_elements_in_first_line: {
+				return error
+			} case Command_Error.too_many_elements_in_first_line: {
+				return error
+			} case Command_Error.title_not_found: {
+				return error
+			} default: {
+				throw error
 			}
-		} else { // False author_id : we won't check every case, unitary tests don't go so far
-			return Query_Result.command_error
+		}
+		// if (error === Concorde_Result.poll_not_close_properly || error === DB_Result.failed_delete || error === Concorde_Result.poll_not_display_properly) {
+		// 	throw error
+		// }
+		// // Until there, existence of author id was not checked for the tests.
+		// let author = await client.users.fetch(author_id)
+		// if (author !== undefined) {
+		// } else { // False author_id : we won't check every case, unitary tests don't go so far
+		// 	console.log("Caution, is it a test?")
+		// 	return Concorde_Result.command_error
+		// }
+	}
+
+	return Concorde_Result.not_vote_action_command
+}
+
+let try_command_poll_action = async function(client: Client, content: string, channel_id: string, author_id: string): Promise<Concorde_Result> {
+	let back_result = await try_command_poll_action_back(client, content, channel_id, author_id)
+	if (back_result !== Concorde_Result.succeeded_create && back_result !== Concorde_Result.not_vote_action_command) {
+		let author = await client.users.fetch(author_id)
+		switch (back_result) {
+			case Command_Error.unclosed_quotation_mark: {
+				author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (guillemet non fermé)." + syntax_stop_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.no_space_or_line_break_after_quotation_mark: {
+				author.send("Erreur. La commande est incomplète : la première ligne ne respecte pas la syntaxe (caractère autre qu'une espace ou un saut de ligne après un guillemet fermant)." + syntax_stop_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.not_enough_elements_in_first_line: {
+				author.send("Erreur. La commande est incorrecte : la première ligne ne contient pas assez d'éléments (il doit y en avoir 2 : l'élément \"!as\" et le titre du vote)." + syntax_stop_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.too_many_elements_in_first_line: {
+				author.send("Erreur. La commande est incorrecte : la première ligne contient trop d'éléments (il ne peut y en avoir que 2 : l'élément \"!as\" et le titre du vote." + syntax_stop_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.title_not_found: {
+				author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(content))
+				return Concorde_Result.command_error
+			} default: {
+				throw -1
+			}
 		}
 	}
 
-	return Query_Result.not_vote_action_command
+	return back_result
 }
 
 export enum Elector_Status {
@@ -750,116 +762,116 @@ let emoji_to_vote = new Map<string, number>([
 
 export let emoji_identifiers = Array.from(emoji_to_vote.keys())
 
-export let try_set_vote = async function(message_id: string, emoji_id: string, reaction_users: ReactionUserManager, user: User, client: Client): Promise<void> {
-	// let message = reaction.message
-	// let message_id = message.id
-	// let emoji_identifier = reaction.emoji.identifier
+let look_for_vote = async function(candidate: Candidate, user_id: string): Promise<Concorde_Result> {
+	let votes = await AppDataSource.getRepository(Vote)
+		.createQueryBuilder("vote")
+		.leftJoinAndSelect("vote.elector", "elector")
+		.leftJoinAndSelect("vote.candidate", "candidate")
+		.where("candidate.message_id = :candidate_message_id_p", { candidate_message_id_p: candidate.message_id })
+		.getMany()
 
-	let candidate: Candidate
-	try {
-		candidate = await getRepository(Candidate)
-			.createQueryBuilder("candidate")
-			.leftJoinAndSelect("candidate.poll", "poll")
-			.where("candidate.message_id = :message_id_p", { message_id_p: message_id })
-			.getOneOrFail()
-	} catch (error) {
-		return
+	for (let vote of votes) {
+		if (await bcrypt.compare(user_id, vote.elector.hash_id)) {
+			return Concorde_Result.found
+		}
 	}
 
-	let poll = candidate.poll
-	
-	reaction_users.remove(user)
+	return Concorde_Result.not_found
+}
 
+export let set_vote = async function(client: Client, poll: Poll, candidate: Candidate, user_id: string, emoji_identifier: string, ): Promise<string> {
+	// Try to find corresponding elector or create it
 	let elector: Elector
 	try {
-		let electors = await getRepository(Elector)
+		let electors = await AppDataSource.getRepository(Elector)
 			.createQueryBuilder("elector")
 			.leftJoinAndSelect("elector.poll", "poll")
 			// .where("elector.hash_id = :hash_id_p", { hash_id_p: string_to_hash(user.id) })
 			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
 			.getMany()
 		for (let elector_p of electors) {
-			if (await bcrypt.compare(user.id, elector_p.hash_id) === true) {
+			if (await bcrypt.compare(user_id, elector_p.hash_id) === true) {
 				elector = elector_p
-				throw Query_Result.found
+				throw Concorde_Result.found
 			}
 		}
-		throw Query_Result.not_found
+		throw Concorde_Result.not_found
 	}
-	catch (error) {
-		if (error === Query_Result.not_found) {
-			try {
-				const saltRounds = 10
-				let i = (await getConnection()
-						.createQueryBuilder()
-						.insert()
-						.into(Elector)
-						.values({
-							hash_id: await bcrypt.hash(user.id, saltRounds),
-							///hash_id: 1,
-							complete: Elector_Status.uncomplete,
-							poll: poll
-						})
-						.execute()).identifiers
-				elector = await getRepository(Elector)
+	catch (result) {
+		switch (result) {
+			case Concorde_Result.not_found: {
+				let i = (await AppDataSource.createQueryBuilder()
+					.insert()
+					.into(Elector)
+					.values({
+						hash_id: await bcrypt.hash(user_id, saltRounds),
+						///hash_id: 1,
+						complete: Elector_Status.uncomplete,
+						poll: poll
+					})
+					.execute()).identifiers
+				elector = await AppDataSource.getRepository(Elector)
 					.createQueryBuilder("elector")
 					.leftJoinAndSelect("elector.poll", "poll")
 					.where("elector.id = :elector_id_p", { elector_id_p: i[0].id })
 					.getOneOrFail()
-			} catch (error) {
-				throw DB_Result.failed_insert
+				break
+			} case Concorde_Result.found: {
+				break
+			} default: {
+				throw result
 			}
 		}
 	}
 
-	let candidate_rank = emoji_to_vote.get(emoji_id)
+	let candidate_rank = emoji_to_vote.get(emoji_identifier)
 
+	// Try to update elector's vote or create it
+	let vote_id: number
 	try {
-		let votes = await getRepository(Vote)
+		let votes = await AppDataSource.getRepository(Vote)
 			.createQueryBuilder("vote")
-			// .leftJoinAndSelect("vote.elector", "elector", "elector = :elector_p", { elector_p: elector })
+			.leftJoinAndSelect("vote.elector", "elector")
 			.leftJoinAndSelect("vote.candidate", "candidate")
 			.where("candidate.message_id = :candidate_message_id_p", { candidate_message_id_p: candidate.message_id })
 			.getMany()
-		if (votes.length === 0) {
-			throw Query_Result.not_found
+
+		for (let vote of votes) {
+			if (await bcrypt.compare(user_id, vote.elector.hash_id)) {
+				vote_id = vote.id
+				throw Concorde_Result.found
+			}
 		}
-		else {
-			let vote_id = votes[0].id
-			try {
-				await getConnection()
-					.createQueryBuilder()
+
+		throw Concorde_Result.not_found
+	} catch (result) {
+		switch (result) {
+			case Concorde_Result.found: {
+				await AppDataSource.createQueryBuilder()
 					.update(Vote)
 					.set({ candidate_rank: candidate_rank })
 					.where("vote.id = :vote_id_p", { vote_id_p: vote_id })
 					.execute()
-			} catch (error) {
-				throw DB_Result.failed_update
+				break
+			} case Concorde_Result.not_found: {
+				await AppDataSource.createQueryBuilder()
+					.insert()
+					.into(Vote)
+					.values({
+						candidate_rank: candidate_rank,
+						elector: elector,
+						candidate: candidate
+					})
+					.execute()
+				break
+			} default: {
+				throw result
 			}
-		}
-	} catch (error) {
-		if (error === DB_Result.failed_update) {
-			throw error
-		}
-		// No vote found : create it
-		try {
-			await getConnection()
-				.createQueryBuilder()
-				.insert()
-				.into(Vote)
-				.values({
-					candidate_rank: candidate_rank,
-					elector: elector,
-					candidate: candidate
-				})
-				.execute()
-		} catch (error) {
-			throw DB_Result.failed_insert
 		}
 	}
 
-	let elector_votes: Array<Vote>
-	elector_votes = await getRepository(Vote)
+	// Update elector's completeness
+	let elector_votes = await AppDataSource.getRepository(Vote)
 		.createQueryBuilder("vote")
 		.leftJoinAndSelect("vote.elector", "elector")
 		.leftJoinAndSelect("vote.candidate", "candidate")
@@ -867,39 +879,74 @@ export let try_set_vote = async function(message_id: string, emoji_id: string, r
 		.getMany()
 
 	let vote_complete = (elector_votes.length === poll.candidates_count)
+	let vote_complete_private_message = ""
 	if (vote_complete) {
+		// Set vote to complete
 		if (elector.complete === Elector_Status.uncomplete) {
-			try {
-				await getConnection()
-					.createQueryBuilder()
-					.update(Elector)
-					.set({ complete: Elector_Status.complete })
-					.where("id = :id_p", { id_p: elector.id })
-					.execute()
-			} catch (error) {
-				throw DB_Result.failed_update
-			}
+			await AppDataSource.createQueryBuilder()
+				.update(Elector)
+				.set({ complete: Elector_Status.complete })
+				.where("id = :id_p", { id_p: elector.id })
+				.execute()
 		}
 
+		// Sort votes by ranking
 		let elector_votes_sorted = elector_votes.sort((a, b) => a.candidate_rank - b.candidate_rank)
 
-		let vote_complete_private_message = "=== **" + poll.title + "** ===\nVotre vote a bien été pris en compte. Voici un récapitulatif :"
-		let vote_candidates: Array<Candidate>
-		vote_candidates = await getRepository(Candidate)
-			.createQueryBuilder("candidate")
-			.leftJoinAndSelect("candidate.poll", "poll")
-			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-			.getMany()
-
+		// Set confirmation private message content
+		vote_complete_private_message = "=== **" + poll.title + "** ===\nVotre vote a bien été pris en compte. Voici un récapitulatif :"
+		// let vote_candidates: Array<Candidate>
+		// vote_candidates = await AppDataSource.getRepository(Candidate)
+		// 	.createQueryBuilder("candidate")
+		// 	.leftJoinAndSelect("candidate.poll", "poll")
+		// 	.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
+		// 	.getMany()
 		for (let i = 0; i < elector_votes_sorted.length; i++) {
 			vote_complete_private_message += "\n" + elector_votes_sorted[i].candidate_rank + " : "/* + "`"*/  + elector_votes_sorted[i].candidate.name/* + "`"*/
 		}
-		let message = await user.send(vote_complete_private_message)
-		if (!message) throw Query_Result.failed_vote
-		try {
-			await poll.update_introduction_message(client)
-		} catch (error) {
-			throw Query_Result.failed_vote
+
+		await poll.update_introduction_message(client)
+	}
+	return vote_complete_private_message
+}
+
+let string_in_array = function(string: string, array: string[]): boolean {
+	for (let element of array) {
+		if (element === string) {
+			return true
 		}
+	}
+	return false
+}
+
+export let try_set_vote = async function(reaction: MessageReaction, user: User, client: Client): Promise<Concorde_Result> {	
+	let candidate: Candidate
+	try {
+		candidate = await AppDataSource.getRepository(Candidate)
+		.createQueryBuilder("candidate")
+		.leftJoinAndSelect("candidate.poll", "poll")
+		.where("candidate.message_id = :message_id_p", { message_id_p: reaction.message.id })
+		.getOneOrFail()
+	} catch (error) {
+		return Concorde_Result.not_vote
+	}
+
+	let message = reaction.message
+	let message_id = message.id
+	let emoji_identifier = reaction.emoji.identifier
+	let reaction_users = reaction.users
+	
+	let poll = candidate.poll
+	
+	await reaction_users.remove(user)
+
+	if (!string_in_array(emoji_identifier, emoji_identifiers.slice(0, poll.candidates_count))) {
+		return Concorde_Result.not_vote
+	}
+	
+	let result = await set_vote(client, poll, candidate, user.id, emoji_identifier)
+	if (result !== "") {
+		let vote_complete_private_message = result
+		await user.send(vote_complete_private_message)
 	}
 }

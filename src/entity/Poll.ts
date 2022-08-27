@@ -1,8 +1,9 @@
-import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, OneToMany, getRepository } from "typeorm"
+import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, OneToMany } from "typeorm"
 import { Elector } from "./Elector"
 import { Candidate } from "./Candidate"
-import { Command_Error, Elector_Status, emoji_identifiers, Query_Result } from "./Bot"
+import { Command_Error, Elector_Status, emoji_identifiers, Concorde_Result } from "./Bot"
 import { Client, TextChannel, MessageEmbed } from "discord.js"
+import { AppDataSource } from "../app"
 const QuickChart = require("quickchart-js")
 
 export enum Poll_State {
@@ -17,7 +18,7 @@ let get_introduction_message_content = async function(title: string, candidates_
 		complete_electors_count = 0
 	} else {
 		let complete_electors: Array<Elector>
-		complete_electors = await getRepository(Elector)
+		complete_electors = await AppDataSource.getRepository(Elector)
 			.createQueryBuilder("elector")
 			.leftJoinAndSelect("elector.poll", "poll")
 			.where("poll.id = :poll_id_p", { poll_id_p: poll_id })
@@ -52,18 +53,17 @@ let get_introduction_message_embed = async function(title: string, end_date_give
 		.setColor("#0099ff")
 		.setTitle("=== **" + title + "** ===")
 		.setDescription(introduction_message_content)
-	if (!introduction_message_embed) throw Query_Result.failed_launch_poll
+	// if (!introduction_message_embed) throw Concorde_Result.failed_launch_poll
 	return introduction_message_embed
 }
 
 export let launch_poll = async function(title: string, end_date_given: boolean, end_date: string, channel_id: string, state: Poll_State, candidates: Array<string>, client: Client): Promise<Array<string>> {
 	let channel = await client.channels.fetch(channel_id) as TextChannel
-	if (!channel) throw Command_Error.channel_not_found
 
 	let launching = true
 	let embed = await get_introduction_message_embed(title, end_date_given, end_date, state, candidates.length, launching, 0)
 	let introduction_message = await channel.send({ embeds: [embed] })
-	if (!introduction_message) throw Query_Result.failed_launch_poll
+	// if (!introduction_message) throw Concorde_Result.failed_launch_poll
 	let introduction_message_id = introduction_message.id
 
 	let messages_ids = [introduction_message_id]
@@ -72,12 +72,12 @@ export let launch_poll = async function(title: string, end_date_given: boolean, 
 	for (let i = 0; i < candidates_count; i++) {
 		let candidate_message_content = candidates[i]
 		let candidate_message = await channel.send(candidate_message_content)
-		if (!candidate_message) throw Query_Result.failed_launch_poll
+		// if (!candidate_message) throw Concorde_Result.failed_launch_poll
 		messages_ids.push(candidate_message.id)
 		
 		for (let j = 0; j < candidates_count; j++) {
 			let reaction = await candidate_message.react(emoji_identifiers[j])
-			if (!reaction) throw Query_Result.failed_launch_poll
+			// if (!reaction) throw Concorde_Result.failed_launch_poll
 		}
 	}
 
@@ -88,6 +88,9 @@ export let launch_poll = async function(title: string, end_date_given: boolean, 
 export class Poll extends BaseEntity {
 	@PrimaryGeneratedColumn()
 	id: number
+
+	@Column()
+	author_hash_id: string
 
 	@Column()
 	title: string
@@ -101,7 +104,9 @@ export class Poll extends BaseEntity {
 	@Column()
 	channel_id: string
 
-	@Column()
+	@Column({
+		unique: true
+	})
 	introduction_message_id: string
 
 	@Column()
@@ -121,8 +126,8 @@ export class Poll extends BaseEntity {
 		let introduction_message = await channel.messages.fetch(this.introduction_message_id)
 		let launching = false
 		let embed = await get_introduction_message_embed(this.title, this.end_date_given, this.end_date, this.state, this.candidates_count, launching, this.id)
-		let edit = await introduction_message.edit({ embeds: [embed] })
-		if (!channel || !introduction_message || !edit) throw Query_Result.poll_not_close_properly
+		/*let edit = */await introduction_message.edit({ embeds: [embed] })
+		// if (!channel || !introduction_message || !edit) throw Concorde_Result.poll_not_close_properly
 	}
 
 	close_poll = async function(client: Client): Promise<void> {
@@ -133,7 +138,7 @@ export class Poll extends BaseEntity {
 
 	display_results = async function(client: Client): Promise<void> { // Promise<(any[] | MessageEmbed)[]>
 		let channel = await client.channels.fetch(this.channel_id) as TextChannel
-		if (!channel) throw Query_Result.poll_not_display_properly
+		// if (!channel) throw Concorde_Result.poll_not_display_properly
 
 		let results_complete = new Array<Array<number>>(this.candidates_count)
 		for (let i = 0; i < results_complete.length; i++) {
@@ -141,7 +146,7 @@ export class Poll extends BaseEntity {
 			results_complete[i] = line
 		}
 		let complete_electors: Array<Elector>
-		complete_electors = await getRepository(Elector)
+		complete_electors = await AppDataSource.getRepository(Elector)
 			.createQueryBuilder("elector")
 			.leftJoinAndSelect("elector.poll", "poll")
 			.where("poll.id = :poll_id_p", { poll_id_p: this.id })
@@ -160,7 +165,7 @@ export class Poll extends BaseEntity {
 			}
 			lines += "\`\`\`"
 			let message = await channel.send(lines)
-			if (!message) throw Query_Result.poll_not_display_properly
+			// if (!message) throw Concorde_Result.poll_not_display_properly
 
 			for (let i = 0; i < results_complete.length; i++) {
 				for (let j = 0; j < results_complete.length; j++) {
@@ -179,7 +184,7 @@ export class Poll extends BaseEntity {
 		}
 		lines += "\`\`\`"
 		let message = await channel.send(lines)
-		if (!message) throw Query_Result.poll_not_display_properly
+		// if (!message) throw Concorde_Result.poll_not_display_properly
 
 		let results_wins_counts = []
 		for (let i = 0; i < results_complete.length; i++) {
@@ -193,7 +198,7 @@ export class Poll extends BaseEntity {
 		}
 
 		let candidates_names: Array<Candidate>
-		candidates_names = await getRepository(Candidate)
+		candidates_names = await AppDataSource.getRepository(Candidate)
 			.createQueryBuilder("candidate")
 			.leftJoinAndSelect("candidate.poll", "poll")
 			.select("name")
@@ -215,7 +220,7 @@ export class Poll extends BaseEntity {
 				chart.getUrl()
 			)
 		let embed = await channel.send({ embeds: [chartEmbed] });
-		if (!embed) throw Query_Result.poll_not_display_properly
+		// if (!embed) throw Concorde_Result.poll_not_display_properly
 
 		// return [results_complete, results_wins_counts, chartEmbed]
 	}

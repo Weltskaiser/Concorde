@@ -1,5 +1,5 @@
 //import { User, UserManager } from 'discord.js'
-import { createConnection, Connection, getConnection, getRepository, EntityNotFoundError } from "typeorm"
+import { EntityNotFoundError, DataSource } from "typeorm"
 import "reflect-metadata"
 import { Bot, Elector_Status } from './entity/Bot'
 import { Client } from "discord.js"
@@ -11,21 +11,21 @@ import { Client } from "discord.js"
 // const QuickChart = require('quickchart-js')
 // import { Client, MessageEmbed, TextChannel } from "discord.js"
 
-export let start = async function(): Promise<Client> {
+export let start_bot = async function(): Promise<Bot> {
 	let bot = new Bot()
-	
+
 	await bot.login()
-	
-	let connection = await createConnection({
-		type: "sqlite",
-		database: "concorde.db",
-		entities: [
-			__dirname + "/entity/**/*.ts"
-		],
-		synchronize: true
-	})
-	await connection.runMigrations()
-	console.log("!!!!!!");
+
+	// let connection = await createConnection({
+	// 	type: "sqlite",
+	// 	database: "concorde.db",
+	// 	entities: [
+	// 		__dirname + "/entity/**/*.ts"
+	// 	],
+	// 	synchronize: true
+	// })
+	// await connection.runMigrations()
+	// console.log("!!!!!!");
 
 	// let i_1 = (await getConnection()
 	// 	.createQueryBuilder()
@@ -370,6 +370,19 @@ export let start = async function(): Promise<Client> {
 	// 		chart.getUrl()
 	// 	)
 	// channel.send({ embeds: [chartEmbed] });
-	return bot.client
+	return bot
 }
-start()
+
+start_bot()
+
+export let AppDataSource = new DataSource({
+	type: "sqlite",
+	database: "concorde.db",
+	entities: [
+		__dirname + "/entity/**/*.ts"
+	],
+	synchronize: true
+})
+AppDataSource.initialize().then(() => { console.log("Database initialized!") })
+// await connection.runMigrations()
+console.log("!!!!!!");

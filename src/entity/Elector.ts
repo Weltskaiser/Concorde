@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, OneToMany, ManyToOne, getRepository } from "typeorm"
+import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, OneToMany, ManyToOne } from "typeorm"
 import { Poll } from "./Poll"
-import { Elector_Status, Query_Result } from "./Bot"
+import { Elector_Status, Concorde_Result } from "./Bot"
 import { Vote } from "./Vote"
+import { AppDataSource } from "../app"
 
 @Entity()
 export class Elector extends BaseEntity {
@@ -21,14 +22,14 @@ export class Elector extends BaseEntity {
 	votes: Array<Vote>
 
 	get_result = async function(): Promise<Array<Array<number>>> {
-		let votes = await getRepository(Vote)
+		let votes = await AppDataSource.getRepository(Vote)
 			.createQueryBuilder("vote")
 			.leftJoinAndSelect("vote.elector", "elector")
 			.leftJoinAndSelect("vote.candidate", "candidate")
 			.where("elector.hash_id = :elector_hash_id_p", { elector_hash_id_p: this.hash_id })
 			.getMany()
 		let votes_sorted = votes.sort((a, b) => a.candidate.order - b.candidate.order) // Votes sortes by poll candidates
-		if (!votes_sorted) throw Query_Result.poll_not_display_properly
+		if (!votes_sorted) throw Concorde_Result.poll_not_display_properly
 		let result = new Array<Array<number>>(votes.length)
 		for (let i = 0; i < result.length; i++) {
 			let line = new Array<number>(votes_sorted.length).fill(0)
