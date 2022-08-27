@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, BaseEntity, OneToMany } from "typeorm"
 import { Elector } from "./Elector"
 import { Candidate } from "./Candidate"
-import { Command_Error, Elector_Status, emoji_identifiers, Concorde_Result } from "./Bot"
+import { Elector_Status, emoji_identifiers } from "./Bot"
 import { Client, TextChannel, MessageEmbed } from "discord.js"
 import { AppDataSource } from "../app"
 const QuickChart = require("quickchart-js")

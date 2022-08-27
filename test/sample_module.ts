@@ -1,66 +1,23 @@
 import { expect } from 'chai'
-import { Elector_Status, set_vote, start_poll_back, try_democratie_amour } from "../src/entity/Bot"
+import { Elector_Status, set_vote, start_poll_back, try_democratie_amour, emoji_to_vote } from "../src/entity/Bot"
 import "reflect-metadata"
 
-import { Client, TextChannel, User } from 'discord.js'
+import { Client, TextChannel } from 'discord.js'
 import { AppDataSource, start_bot } from '../src/app'
 import { Poll, Poll_State } from '../src/entity/Poll'
 import { Candidate } from '../src/entity/Candidate'
 import * as bcrypt from "bcrypt"
 import { Vote } from '../src/entity/Vote'
 
-// class Client extends Bot {
-
-// 	static async create() {
-// 		let res = new Client()
-// 		await res.init()
-// 		return res
-// 	}
-
-// 	private letructor () {
-// 		super()
-// 	}
-
-// 	private init = async () => {
-// 		await this.login()
-// 	}
-// }
-
-
-// let client = await Client.create()
-// let bot = await start()
-// let client = bot.client
-// bot.allow_self_respond()
-// let channel = await client.get_channel("919198908352167947") as TextChannel
-
-// let start = async function(): Promise<Bot> {
-// 	let bot = new Bot()
-
-// 	await bot.login()
-
-// 	let connection = await createConnection({
-// 		type: "sqlite",
-// 		database: "concorde.db",
-// 		entities: [
-// 			__dirname + "/entity/**/*.ts"
-// 		],
-// 		synchronize: true
-// 	})
-// 	await connection.runMigrations()
-// 	console.log("!!!!!!");
-
-// 	return bot
-// }
-
 let right_democracy_question = "La démocratie à Grignon c'est quoi ?"
 let wrong_democracy_question = "La démocratei à Grignon c'est quoi ?"
 let channel_1_id = "919198908352167947"
 let author_1_id = "1234567890"
+let author_2_id = "1357902468"
+let author_3_id = "9876543210"
 const saltRounds = 10
 
 let try_democratie_amour_ok = async (message: string, channel_id: string) => {
-	// let bot = await start()
-	// bot.allow_self_respond()
 	let bot = await start_bot()
 	let client = bot.client
 
@@ -68,7 +25,6 @@ let try_democratie_amour_ok = async (message: string, channel_id: string) => {
 	let message_sent = await channel.send(message)
 
 	let result = await try_democratie_amour(message_sent)
-	// await getConnection().close()
 	// await AppDataSource.destroy()
 	return result
 }
@@ -91,7 +47,7 @@ let create_poll_wanted = async function(author_id: string, title: string, end_da
 				end_date_given: true,
 				end_date: end_date,
 				channel_id: channel_id,
-				introduction_message_id: "1234567890",
+				introduction_message_id: author_id,
 				state: Poll_State.open,
 				candidates_count: candidates_s.length
 			})
@@ -103,7 +59,7 @@ let create_poll_wanted = async function(author_id: string, title: string, end_da
 			.into(Candidate)
 			.values({
 				name: candidates_s[i],
-				message_id: candidates_s[i],
+				message_id: candidates_s[i]+author_id,
 				order: i,
 				poll: poll_wanted
 			})
@@ -116,7 +72,6 @@ let create_poll_wanted = async function(author_id: string, title: string, end_da
 let try_create_right_poll = async function(): Promise<boolean> {
 	let bot = await start_bot()
 	let client = bot.client
-	// console.log(await AppDataSource.getRepository(Poll).find())
 
 	let author_id = author_1_id
 	let command = `n Salut "C'est cool"\nA\nB`
@@ -148,32 +103,12 @@ let try_create_right_poll = async function(): Promise<boolean> {
 	return result
 }
 
-let try_create_right_vote = async function(): Promise<boolean> {
-	let bot = await start_bot()
-	let client = bot.client
-
-	let author_id = author_1_id
-	let command = `n Salut "C'est cool"\nA\nB`
-	let title = "Salut"
-	let end_date = "C'est cool"
-	let channel_id = channel_1_id
-	let candidates_s = ["A", "B"]
-
-	let poll_wanted = await create_poll_wanted(author_id, title, end_date, channel_id, candidates_s)
-	// console.log("Srx ?", poll_wanted)
-
-
-	let candidate_index = 0
-	let candidates = await AppDataSource.getRepository(Candidate)
-		.createQueryBuilder("candidate")
-		.leftJoinAndSelect("candidate.poll", "poll")
-		.where("poll.id = :poll_id_p", { poll_id_p: poll_wanted.id })
-		.getMany()
+let try_set_vote = async function(client: Client, poll_wanted: Poll, candidates: Candidate[], elector_id: string, candidate_index: number, emoji_id: string) {
+	let candidate_rank = emoji_to_vote.get(emoji_id)
 	let candidate = candidates[candidate_index]
 	let candidate_message_id = candidate.message_id
-	let emoji_id = "1%E2%83%A3"
 
-	await set_vote(client, poll_wanted, candidate, author_id, emoji_id)
+	await set_vote(client, poll_wanted, candidate, elector_id, emoji_id)
 	let vote_created = await AppDataSource.getRepository(Vote)
 		.createQueryBuilder("vote")
 		.leftJoinAndSelect("vote.candidate", "candidate")
@@ -183,10 +118,68 @@ let try_create_right_vote = async function(): Promise<boolean> {
 		.getOneOrFail()
 	// console.log(vote_created, vote_created.elector)
 
-	let result = vote_created.candidate_rank === 1
-		&& await bcrypt.compare(author_id, vote_created.elector.hash_id)
+	let result = vote_created.candidate_rank === candidate_rank
+		&& await bcrypt.compare(elector_id, vote_created.elector.hash_id)
 		&& vote_created.elector.complete === Elector_Status.uncomplete
 		&& vote_created.elector.poll.id === poll_wanted.id
+
+	return result
+}
+
+let try_create_right_vote = async function(): Promise<boolean> {
+	let bot = await start_bot()
+	let client = bot.client
+
+	let poll_author_id = author_2_id
+	let command = `n Salut "C'est cool"\nA\nB`
+	let title = "Salut"
+	let end_date = "C'est cool"
+	let channel_id = channel_1_id
+	let candidates_s = ["A", "B"]
+
+	let poll_wanted = await create_poll_wanted(poll_author_id, title, end_date, channel_id, candidates_s)
+	let candidates = await AppDataSource.getRepository(Candidate)
+		.createQueryBuilder("candidate")
+		.leftJoinAndSelect("candidate.poll", "poll")
+		.where("poll.id = :poll_id_p", { poll_id_p: poll_wanted.id })
+		.getMany()
+
+	let elector_id = author_1_id
+	let candidate_index = 0
+	let emoji_id = "1%E2%83%A3"
+	let result = try_set_vote(client, poll_wanted, candidates, elector_id, candidate_index, emoji_id)
+
+	return result
+}
+
+let try_create_2_right_votes = async function(): Promise<boolean> {
+	let bot = await start_bot()
+	let client = bot.client
+
+	let poll_author_id = author_1_id
+	let command = `n Salut "C'est cool"\nA\nB`
+	let title = "Salut"
+	let end_date = "C'est cool"
+	let channel_id = channel_1_id
+	let candidates_s = ["A", "B"]
+
+	let poll_wanted = await create_poll_wanted(poll_author_id, title, end_date, channel_id, candidates_s)
+	let candidates = await AppDataSource.getRepository(Candidate)
+		.createQueryBuilder("candidate")
+		.leftJoinAndSelect("candidate.poll", "poll")
+		.where("poll.id = :poll_id_p", { poll_id_p: poll_wanted.id })
+		.getMany()
+
+	let elector_1_id = author_2_id
+	let elector_2_id = author_3_id
+	let candidate_index_1 = 0
+	let candidate_index_2 = 1
+	let emoji_1_id = "1%E2%83%A3"
+	let emoji_2_id = "2%E2%83%A3"
+	let result_1 = await try_set_vote(client, poll_wanted, candidates, elector_1_id, candidate_index_1, emoji_1_id)
+	let result_2 = await try_set_vote(client, poll_wanted, candidates, elector_2_id, candidate_index_2, emoji_2_id)
+
+	let result = result_1 && result_2
 
 	return result
 }
@@ -203,5 +196,8 @@ describe('Module', () => {
 	})
 	it('vote', async () => {
 		expect(await try_create_right_vote()).to.equal(true)
+	})
+	it('vote 2 electors', async () => {
+		expect(await try_create_2_right_votes()).to.equal(true)
 	})
 })

@@ -1,4 +1,4 @@
-import { Client, Message, TextChannel, User, MessageReaction, ReactionUserManager } from 'discord.js'
+import { Client, Message, TextChannel, User, MessageReaction, PartialMessage } from 'discord.js'
 import { Poll_State,launch_poll, Poll } from "./Poll"
 import { Trigger } from "./Trigger"
 import { Elector } from './Elector'
@@ -10,7 +10,6 @@ import { AppDataSource } from '../app'
 const saltRounds = 10
 
 export class Bot {
-	// private client: Client
 	public client: Client
 	private self_respond_counter: number
 
@@ -19,7 +18,7 @@ export class Bot {
 
 	constructor () {
 		this.client = new Client({ intents: ["GUILDS", "GUILD_MESSAGES", "GUILD_MESSAGE_REACTIONS", "DIRECT_MESSAGES"], partials: ["REACTION", "USER", "MESSAGE", "CHANNEL"] })
-		this.self_respond_counter = 0
+		// this.self_respond_counter = 0
 
 		this.client.on('ready', async () => {
 			console.log(`Hé !! Logged in as ${this.client.user.tag}!`)
@@ -30,11 +29,7 @@ export class Bot {
 		this.client.on('messageCreate', async (message: Message) => {
 			try {
 				if (message.author.id === this.client.user.id) {
-					if (this.self_respond_counter === 0) {
-						return
-					} else {
-						this.self_respond_counter--
-					}
+					return
 				}
 
 				// Check fan service messages
@@ -66,22 +61,6 @@ export class Bot {
 
 				// Check if the message author is trying to close a poll
 				let command_poll_action_r = await try_command_poll_action(this.client, message.content, message.channelId, message.author.id)
-				// } catch (error) {
-				// 	switch (error) {
-				// 		case Concorde_Result.poll_not_close_properly: {
-				// 			console.log("Proper poll close failed")
-				// 			throw error
-				// 		} case Concorde_Result.poll_not_display_properly: {
-				// 			console.log("Proper poll display failed")
-				// 			throw error
-				// 		} case DB_Result.failed_delete: {
-				// 			console.log("Failed deleting votes, candidates, electors or poll")
-				// 			throw error
-				// 		} default: {
-				// 			throw error
-				// 		}
-				// 	}
-				// }
 				if (command_poll_action_r === Concorde_Result.succeeded_create || command_poll_action_r === Concorde_Result.command_error) {
 					// The command has already done everything it is supposed to do
 					message.delete()
@@ -89,34 +68,24 @@ export class Bot {
 				}
 				// From here, command_poll_action_r = Concorde_Result.not_a_command
 			} catch (error) {
-				await message.channel.send(this.discord_crash_message)
+				await this.crash_log(message)
 				throw error
 			}
 		})
 
 		this.client.on('messageReactionAdd', async (reaction: MessageReaction, user: User) => {
-			if (this.client.user.id === user.id) {
-				return
-			}
+			try {
+				if (this.client.user.id === user.id) {
+					return
+				}
+				throw new Error("Oups")
 
-			// try {
-			await try_set_vote(reaction, user, this.client)
-			// } catch (error) {
-			// 	switch (error) {
-			// 		case DB_Result.failed_update: {
-			// 			console.log("Failed updating elector.")
-			// 			throw error
-			// 		} case DB_Result.failed_insert: {
-			// 			console.log("Failed inserting elector.")
-			// 			throw error
-			// 		} case Concorde_Result.failed_vote: {
-			// 			console.log("Failed voting")
-			// 			throw error
-			// 		} default: {
-			// 			throw error
-			// 		}
-			// 	}
-			// }
+				// try {
+				await try_set_vote(reaction, user, this.client)
+			} catch (error) {
+				await this.crash_log(reaction.message)
+				throw error
+			}
 		})
 	}
 
@@ -124,71 +93,32 @@ export class Bot {
 		await this.client.login(process.env.DISCORD_BOT_TOKEN)
 	}
 
-	get_channel = async (channel_id: string) => {
-		return await this.client.channels.fetch(channel_id) as TextChannel
-	} ////// /!\
-
-	allow_self_respond = (count: number = 1) => {
-		this.self_respond_counter = count
+	private crash_log = async (message: Message<boolean> | PartialMessage): Promise<void> => {
+		await this.Nicolas.send(this.discord_crash_message)
+		await message.channel.send(this.discord_crash_message)
 	}
 }
 
-enum Bcrypt_Result {
-	failed_hash = 0,
-	failed_compare = 1
-}
-
 export enum Concorde_Result {
-	failed = 2,
-	found = 3,
-	not_found = 4,
-	failed_create = 5,
-	succeeded_create = 6,
-	failed_launch_poll = 7,
-	failed_vote = 8,
-	poll_not_close_properly = 9,
-	poll_not_display_properly = 10,
-	// not_a_command,
-	not_trigger_command = 11,
-	not_vote_action_command = 12,
-	not_vote = 99,
-	command_error = 13
+	found = 0,
+	not_found = 1,
+	succeeded_create = 2,
+	not_trigger_command = 3,
+	not_vote_action_command = 4,
+	not_vote = 5,
+	command_error = 6
 }
-
-enum Discord_Result {
-	failed_send = 14
-}
-
-enum DB_Result {
-	found = 15,
-	not_found = 16,
-	failed_insert = 17,
-	// succeeded_insert,
-	failed_update = 18,
-	// succeeded_update,
-	failed_delete = 19,
-	// succeeded_delete,
-	failed_select = 20,
-	// succeeded_select
-}
-
-// enum Insert_Error {
-// 	poll_insertion_failed = 10,
-// 	candidate_insertion_failed = 11,
-// 	elector_insertion_failed = 12
-// }
 
 export enum Command_Error {
-	empty_line = 21,
-	unclosed_quotation_mark = 22,
-	no_space_or_line_break_after_quotation_mark = 23,
-	not_enough_elements_in_first_line = 24,
-	too_many_elements_in_first_line = 25,
-	first_character_not_n = 26,
-	already_poll_in_channel_having_title = 27,
-	not_enough_lines = 28,
-	title_not_found = 29,
-	channel_not_found = 30
+	empty_line = 7,
+	unclosed_quotation_mark = 8,
+	no_space_or_line_break_after_quotation_mark = 9,
+	not_enough_elements_in_first_line = 10,
+	too_many_elements_in_first_line = 11,
+	first_character_not_n = 12,
+	already_poll_in_channel_having_title = 13,
+	not_enough_lines = 14,
+	title_not_found = 15
 }
 
 /*interface error_E {
@@ -290,7 +220,6 @@ let try_send_dm_unallowed = async function(message: Message): Promise<boolean> {
 let look_for_trigger = async function(message_channel_id: string, message_author_id: string): Promise<Concorde_Result> {
 	let triggers = await AppDataSource.getRepository(Trigger)
 		.createQueryBuilder("trigger")
-		// .where("trigger.author_hash_id = :author_hash_id_p", { author_hash_id_p: string_to_hash(message.author.id) })
 		.where("trigger.channel_id = :channel_id_p", { channel_id_p: message_channel_id })
 		.getMany()
 	
@@ -356,21 +285,6 @@ let syntax_start_reminder = function(message_content: string): string {
 }
 
 export let start_poll_back = async function(client: Client, content: string, author_id: string, channel_id: string): Promise<Concorde_Result | Command_Error> {
-	// if (trigger_found === Concorde_Result.found) {
-	// 	try {
-	// 		await getRepository(Poll)
-	// 			.createQueryBuilder("poll")
-	// 			.where("poll.channel_id = :poll_channel_id_p", { poll_channel_id_p: message.channelId })
-	// 			.getOneOrFail()
-	// 	} catch (error) {
-	// 		return Concorde_Result.not_a_command
-	// 	}
-	// 	return Concorde_Result.found
-	// } else {
-	// let message_content = message.content
-	// let message_author = message.author
-	// let message_channel_id = message.channelId
-
 	try {
 		let lines = cut_into_lines(content)
 
@@ -513,7 +427,7 @@ let start_poll = async function(client: Client, content: string, author_id: stri
 				author.send("Erreur. La commande est incomplète : elle doit faire minimum 2 lignes (aucun candidat n'a été fourni)." + syntax_start_reminder(content))
 				return Concorde_Result.command_error
 			} default: {
-				throw -1
+				throw new Error("Unexpected return value for start_poll_back")
 			}
 		}
 	}
@@ -584,14 +498,6 @@ let delete_poll = async function(client: Client, poll: Poll): Promise<Concorde_R
 }
 
 let try_command_poll_action_back = async function(client: Client, content: string, channel_id: string, author_id: string): Promise<Concorde_Result | Command_Error> {
-	// if (start_found !== Concorde_Result.found) {
-	// 	return Concorde_Result.not_a_command
-	// }
-
-	// let message_content = message.content
-	// let message_channel_id = message.channelId
-	// let message_author = message.author
-
 	try {
 		let command = cut_command(content)
 		if (command[0] === "!as") { /*arrêter scrutin*/
@@ -624,17 +530,6 @@ let try_command_poll_action_back = async function(client: Client, content: strin
 				throw error
 			}
 		}
-		// if (error === Concorde_Result.poll_not_close_properly || error === DB_Result.failed_delete) {
-		// 	throw error
-		// }
-		// // Until there, existence of author id was not checked for the tests.
-		// let author = await client.users.fetch(author_id)
-		// if (author !== undefined) {
-			
-		// } else { // False author_id : we won't check every case, unitary tests don't go so far
-		// 	console.log("Caution, is it a test?")
-		// 	return Concorde_Result.command_error
-		// }
 	}
 
 	try {
@@ -673,16 +568,6 @@ let try_command_poll_action_back = async function(client: Client, content: strin
 				throw error
 			}
 		}
-		// if (error === Concorde_Result.poll_not_close_properly || error === DB_Result.failed_delete || error === Concorde_Result.poll_not_display_properly) {
-		// 	throw error
-		// }
-		// // Until there, existence of author id was not checked for the tests.
-		// let author = await client.users.fetch(author_id)
-		// if (author !== undefined) {
-		// } else { // False author_id : we won't check every case, unitary tests don't go so far
-		// 	console.log("Caution, is it a test?")
-		// 	return Concorde_Result.command_error
-		// }
 	}
 
 	return Concorde_Result.not_vote_action_command
@@ -709,7 +594,7 @@ let try_command_poll_action = async function(client: Client, content: string, ch
 				author.send("Erreur. La commande est incorrecte : aucun vote dans ce salon ne possède le titre fourni." + syntax_results_reminder(content))
 				return Concorde_Result.command_error
 			} default: {
-				throw -1
+				throw new Error("Unexpected return value for try_poll_action_back")
 			}
 		}
 	}
@@ -722,7 +607,7 @@ export enum Elector_Status {
 	complete
 }
 
-let emoji_to_vote = new Map<string, number>([
+export let emoji_to_vote = new Map<string, number>([
 	["1%E2%83%A3", 1], // 1
 	["2%E2%83%A3", 2], // 2
 	["3%E2%83%A3", 3], // 3
@@ -762,23 +647,6 @@ let emoji_to_vote = new Map<string, number>([
 
 export let emoji_identifiers = Array.from(emoji_to_vote.keys())
 
-let look_for_vote = async function(candidate: Candidate, user_id: string): Promise<Concorde_Result> {
-	let votes = await AppDataSource.getRepository(Vote)
-		.createQueryBuilder("vote")
-		.leftJoinAndSelect("vote.elector", "elector")
-		.leftJoinAndSelect("vote.candidate", "candidate")
-		.where("candidate.message_id = :candidate_message_id_p", { candidate_message_id_p: candidate.message_id })
-		.getMany()
-
-	for (let vote of votes) {
-		if (await bcrypt.compare(user_id, vote.elector.hash_id)) {
-			return Concorde_Result.found
-		}
-	}
-
-	return Concorde_Result.not_found
-}
-
 export let set_vote = async function(client: Client, poll: Poll, candidate: Candidate, user_id: string, emoji_identifier: string, ): Promise<string> {
 	// Try to find corresponding elector or create it
 	let elector: Elector
@@ -786,7 +654,6 @@ export let set_vote = async function(client: Client, poll: Poll, candidate: Cand
 		let electors = await AppDataSource.getRepository(Elector)
 			.createQueryBuilder("elector")
 			.leftJoinAndSelect("elector.poll", "poll")
-			// .where("elector.hash_id = :hash_id_p", { hash_id_p: string_to_hash(user.id) })
 			.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
 			.getMany()
 		for (let elector_p of electors) {
@@ -805,7 +672,6 @@ export let set_vote = async function(client: Client, poll: Poll, candidate: Cand
 					.into(Elector)
 					.values({
 						hash_id: await bcrypt.hash(user_id, saltRounds),
-						///hash_id: 1,
 						complete: Elector_Status.uncomplete,
 						poll: poll
 					})
@@ -895,12 +761,6 @@ export let set_vote = async function(client: Client, poll: Poll, candidate: Cand
 
 		// Set confirmation private message content
 		vote_complete_private_message = "=== **" + poll.title + "** ===\nVotre vote a bien été pris en compte. Voici un récapitulatif :"
-		// let vote_candidates: Array<Candidate>
-		// vote_candidates = await AppDataSource.getRepository(Candidate)
-		// 	.createQueryBuilder("candidate")
-		// 	.leftJoinAndSelect("candidate.poll", "poll")
-		// 	.where("poll.id = :poll_id_p", { poll_id_p: poll.id })
-		// 	.getMany()
 		for (let i = 0; i < elector_votes_sorted.length; i++) {
 			vote_complete_private_message += "\n" + elector_votes_sorted[i].candidate_rank + " : "/* + "`"*/  + elector_votes_sorted[i].candidate.name/* + "`"*/
 		}
@@ -931,8 +791,6 @@ export let try_set_vote = async function(reaction: MessageReaction, user: User, 
 		return Concorde_Result.not_vote
 	}
 
-	let message = reaction.message
-	let message_id = message.id
 	let emoji_identifier = reaction.emoji.identifier
 	let reaction_users = reaction.users
 	
