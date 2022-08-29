@@ -118,7 +118,8 @@ export enum Command_Error {
 	already_poll_in_channel_having_title = 13,
 	not_enough_lines = 14,
 	title_not_found = 15,
-	unallowed_operation = 16
+	unallowed_operation = 16,
+	too_many_candidates = 17
 }
 
 /*interface error_E {
@@ -287,6 +288,7 @@ let syntax_start_reminder = function(message_content: string): string {
 export let start_poll_back = async function(client: Client, content: string, author_id: string, channel_id: string): Promise<Concorde_Result | Command_Error> {
 	try {
 		let lines = cut_into_lines(content)
+		if (lines.length > 21) throw Command_Error.too_many_candidates
 
 		let first_line = lines[0]
 
@@ -360,7 +362,9 @@ export let start_poll_back = async function(client: Client, content: string, aut
 		}
 	} catch (error) {
 		switch (error) {
-			case Command_Error.empty_line: {
+			case Command_Error.too_many_candidates: {
+				return error
+			} case Command_Error.empty_line: {
 				return error
 			} case Command_Error.unclosed_quotation_mark: {
 				return error
@@ -399,7 +403,10 @@ let start_poll = async function(client: Client, content: string, author_id: stri
 	if (back_result !== Concorde_Result.succeeded_create) {
 		let author = await client.users.fetch(author_id)
 		switch (back_result) {
-			case Command_Error.empty_line: {
+			case Command_Error.too_many_candidates: {
+				author.send("Erreur. La commande est incorrecte : trop de candidats ont été fournis (maximum 20)." + syntax_start_reminder(content))
+				return Concorde_Result.command_error
+			} case Command_Error.empty_line: {
 				author.send("Erreur. La commande est incorrecte : une ligne vide a été fournie (candidat vide)." + syntax_start_reminder(content))
 				return Concorde_Result.command_error
 			} case Command_Error.empty_line: {
